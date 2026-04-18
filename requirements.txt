@@ -1,0 +1,12 @@
+# requirements.txt
+# Install on the Pi with: pip install -r requirements.txt
+
+# Hardware (Adafruit PCA9685 PWM controller + motor/servo abstractions)
+adafruit-circuitpython-pca9685
+adafruit-circuitpython-motor
+
+# WebSocket server
+websockets
+
+# Config file parsing
+pyyaml

@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# AI model weights (can be large)
+src/ai/models/*
+!src/ai/models/.gitkeep
+
+# Logs and output
+*.log
+output.txt
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Environment variables
+.env

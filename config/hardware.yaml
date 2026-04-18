@@ -1,0 +1,32 @@
+# hardware.yaml
+# Central config for all hardware pin assignments and I2C addresses.
+# Load this in src/core/config.py and pass values down to hardware modules.
+# Never hardcode pins in hardware files — always read from here.
+
+pca9685:
+  i2c_address: 0x5f   # Adeept default (not the standard 0x40)
+  frequency: 50        # PWM frequency in Hz
+
+motors:
+  rear:
+    channel_in1: 0     # TODO: verify correct PCA9685 channel from examples/04_motor.py
+    channel_in2: 1     # TODO: verify correct PCA9685 channel from examples/04_motor.py
+
+servos:
+  servo0:              # Front wheel steering (left / right)
+    channel: 0         # TODO: verify correct PCA9685 channel from examples/03_servo.py
+    center_angle: 90   # Straight ahead
+    max_left: 45       # Maximum left turn angle
+    max_right: 135     # Maximum right turn angle
+
+  servo1:              # Head rotation left/right
+    channel: 1
+    center_angle: 90
+
+  servo2:              # Head rotation up/down
+    channel: 2
+    center_angle: 90
+
+websocket:
+  host: "0.0.0.0"     # Listen on all interfaces so Mac can connect over WiFi
+  port: 8765
