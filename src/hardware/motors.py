@@ -25,7 +25,7 @@ class RearMotor:
 
     def set_speed(self, speed: int):
         max_speed = self._motor_cfg["rear"]["max_speed"]
-        rate = self._motor_cfg["rear"]["step_size"]  # units per second
+        rate = self._motor_cfg["rear"]["accelerate_rate"]  # units per second
         speed = max(-max_speed, min(max_speed, speed))
 
         now = time.monotonic()
@@ -43,11 +43,12 @@ class RearMotor:
 
     async def smooth_stop(self):
         max_speed = self._motor_cfg["rear"]["max_speed"]
-        rate = self._motor_cfg["rear"]["step_size"]
+        rate = self._motor_cfg["rear"]["decelerate_rate"]  # units per second
         while abs(self._current_speed) > 0.1:
             now = time.monotonic()
             dt = now - self._last_update
             self._last_update = now
+            
             step = rate * dt
             if self._current_speed > 0:
                 self._current_speed = max(0.0, self._current_speed - step)
