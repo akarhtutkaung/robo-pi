@@ -18,21 +18,21 @@ class RearMotor:
             self._pca.channels[motor_cfg["rear"]["channel_in1"]],
             self._pca.channels[motor_cfg["rear"]["channel_in2"]]
         )
-        self._current_speed = 0
-
     def set_speed(self, speed: int):
         max_speed = self._motor_cfg["rear"]["max_speed"]
         step = self._motor_cfg["rear"]["step_size"]
         speed = max(-max_speed, min(max_speed, speed))
-        if speed > self._current_speed:
-            self._current_speed = min(speed, self._current_speed + step)
-        elif speed < self._current_speed:
-            self._current_speed = max(speed, self._current_speed - step)
-        self._motor.throttle = self._current_speed / max_speed
-        print(f"Current speed: {self._current_speed} (requested: {speed})")
+        current = round((self._motor.throttle or 0) * max_speed)
+        if speed > current:
+            new_speed = min(speed, current + step)
+        elif speed < current:
+            new_speed = max(speed, current - step)
+        else:
+            return
+        self._motor.throttle = new_speed / max_speed
+        print(f"Current speed: {new_speed} (requested: {speed})")
 
     def stop(self):
-        self._current_speed = 0
         self._motor.throttle = 0
 
     def cleanup(self):
