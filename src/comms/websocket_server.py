@@ -18,6 +18,7 @@ async def on_connect(websocket, controller):
     except websockets.exceptions.ConnectionClosed:
         pass
     finally:
+        controller.stop()  # ensure robot stops if client disconnects
         print(f"Client disconnected: {websocket.remote_address}")
 
 async def start_server(controller):

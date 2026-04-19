@@ -16,8 +16,8 @@ servos:
   servo0:              # Front wheel steering (left / right)
     channel: 0         # TODO: verify correct PCA9685 channel from examples/03_servo.py
     center_angle: 90   # Straight ahead
-    max_left: 45       # Maximum left turn angle
-    max_right: 135     # Maximum right turn angle
+    max_left: 30       # Maximum left turn angle
+    max_right: 150     # Maximum right turn angle
 
   servo1:              # Head rotation left/right
     channel: 1

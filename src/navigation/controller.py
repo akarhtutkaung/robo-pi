@@ -17,11 +17,11 @@ from src.hardware.servos import ServoController
 class RobotController:
     def __init__(self):
         i2c = busio.I2C(board.SCL, board.SDA)
-        pca = PCA9685(i2c, address=PCA_CFG["i2c_address"])
-        pca.frequency = PCA_CFG["frequency"]
+        self._pca = PCA9685(i2c, address=PCA_CFG["i2c_address"])
+        self._pca.frequency = PCA_CFG["frequency"]
 
-        self._motor = RearMotor(pca, MOTOR_CFG)
-        self._servo = ServoController(pca, SERVO_CFG)
+        self._motor = RearMotor(self._pca, MOTOR_CFG)
+        self._servo = ServoController(self._pca, SERVO_CFG)
         self._servo.center_all()  # safe starting position
     
     def setSpeed(self, speed: int):
@@ -44,5 +44,7 @@ class RobotController:
 
     def cleanup(self):
         self.stop()
-        self._servo.center_all()
-        self._motor.cleanup()    
+        self._servo.cleanup()
+        self._motor.cleanup()
+        self._pca.channels[0].duty_cycle = 0
+        self._pca.deinit() 

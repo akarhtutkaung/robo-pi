@@ -30,3 +30,8 @@ class ServoController:
     def center_all(self):
         for name in self._servos:
             self.center(name)
+
+    def cleanup(self):
+        self.center_all()
+        for servo in self._servos.values():
+            servo.angle = None  # release the servo
