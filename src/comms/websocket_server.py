@@ -9,7 +9,7 @@ import websockets
 from src.comms.handlers.movement import handle
 from src.core.config import WS_CFG
 
-IDLE_TIMEOUT = 2.0  # seconds before stopping if no message received
+IDLE_TIMEOUT = 0.5  # seconds before stopping if no message received
 
 async def on_connect(websocket, controller):
     print(f"Client connected: {websocket.remote_address}")

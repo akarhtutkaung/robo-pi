@@ -29,6 +29,7 @@ class RearMotor:
         elif speed < self._current_speed:
             self._current_speed = max(speed, self._current_speed - step)
         self._motor.throttle = self._current_speed / max_speed
+        print(f"Current speed: {self._current_speed} (requested: {speed})")
 
     def stop(self):
         self._current_speed = 0
