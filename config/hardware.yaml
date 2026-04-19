@@ -11,7 +11,7 @@ motors:
   rear:
     channel_in1: 15     # positive pole
     channel_in2: 14     # negative pole
-    max_speed: 30
+    max_speed: 14
     step_size: 10         # Acceleration rate in units/second (60 = full speed in ~0.5s)
 
 servos:

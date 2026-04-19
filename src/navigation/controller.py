@@ -38,6 +38,10 @@ class RobotController:
         angle = max(cfg["max_left"], min(cfg["max_right"], angle))
         self._servo.set_angle("servo0", angle)
 
+    async def smooth_stop(self):
+        await self._motor.smooth_stop()
+        self._servo.center("servo0")
+
     def stop(self):
         self._motor.stop()
         self._servo.center("servo0")

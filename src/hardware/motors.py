@@ -6,6 +6,7 @@ It uses the Adafruit Motor library for easy motor control
 and the Adafruit PCA9685 library for PWM signal generation.
 """
 
+import asyncio
 import time
 import board, busio
 from adafruit_pca9685 import PCA9685
@@ -39,6 +40,22 @@ class RearMotor:
 
         self._motor.throttle = self._current_speed / max_speed
         print(f"Current speed: {self._current_speed:.1f} (requested: {speed})")
+
+    async def smooth_stop(self):
+        max_speed = self._motor_cfg["rear"]["max_speed"]
+        rate = self._motor_cfg["rear"]["step_size"]
+        while abs(self._current_speed) > 0.1:
+            now = time.monotonic()
+            dt = now - self._last_update
+            self._last_update = now
+            step = rate * dt
+            if self._current_speed > 0:
+                self._current_speed = max(0.0, self._current_speed - step)
+            else:
+                self._current_speed = min(0.0, self._current_speed + step)
+            self._motor.throttle = self._current_speed / max_speed
+            await asyncio.sleep(0.02)
+        self.stop()
 
     def stop(self):
         self._current_speed = 0.0

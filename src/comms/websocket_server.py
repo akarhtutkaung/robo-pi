@@ -20,7 +20,7 @@ async def on_connect(websocket, controller):
                 print(f"Received message: {raw_message}")
                 await handle(websocket, raw_message, controller)
             except asyncio.TimeoutError:
-                controller.stop()
+                await controller.smooth_stop()
     except websockets.exceptions.ConnectionClosed:
         pass
     finally:

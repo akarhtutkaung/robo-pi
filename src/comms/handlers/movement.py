@@ -21,11 +21,11 @@ async def handle(websocket, raw: str, controller: RobotController):
         if speed != 0:
             controller.setSpeed(speed)
         else:
-            controller.stop()
+            await controller.smooth_stop()
     elif action == "steer":
         angle = msg.get("angle", 90)
         controller.steer(angle)
     elif action == "stop":
-        controller.stop()
+        await controller.smooth_stop()
 
     await websocket.send(build_response("ok", f"executed: {action}"))
