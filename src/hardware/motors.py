@@ -11,10 +11,8 @@ from adafruit_pca9685 import PCA9685
 from adafruit_motor import motor as adafruit_motor
 
 class RearMotor:
-    def __init__(self, pca_cfg, motor_cfg):
-        i2c = busio.I2C(board.SCL, board.SDA)
-        self._pca = PCA9685(i2c, address=pca_cfg["i2c_address"])
-        self._pca.frequency = pca_cfg["frequency"]
+    def __init__(self, pca, motor_cfg):
+        self._pca = pca
         self._motor = adafruit_motor.DCMotor(
             self._pca.channels[motor_cfg["rear"]["channel_in1"]],
             self._pca.channels[motor_cfg["rear"]["channel_in2"]]
