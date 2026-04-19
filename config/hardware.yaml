@@ -12,7 +12,7 @@ motors:
     channel_in1: 15     # positive pole
     channel_in2: 14     # negative pole
     max_speed: 30
-    step_size: 5          # Speed change step size for smoother acceleration
+    step_size: 10         # Acceleration rate in units/second (60 = full speed in ~0.5s)
 
 servos:
   servo0:              # Front wheel steering (left / right)

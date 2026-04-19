@@ -6,6 +6,7 @@ It uses the Adafruit Motor library for easy motor control
 and the Adafruit PCA9685 library for PWM signal generation.
 """
 
+import time
 import board, busio
 from adafruit_pca9685 import PCA9685
 from adafruit_motor import motor as adafruit_motor
@@ -18,21 +19,30 @@ class RearMotor:
             self._pca.channels[motor_cfg["rear"]["channel_in1"]],
             self._pca.channels[motor_cfg["rear"]["channel_in2"]]
         )
+        self._current_speed = 0.0
+        self._last_update = time.monotonic()
+
     def set_speed(self, speed: int):
         max_speed = self._motor_cfg["rear"]["max_speed"]
-        step = self._motor_cfg["rear"]["step_size"]
+        rate = self._motor_cfg["rear"]["step_size"]  # units per second
         speed = max(-max_speed, min(max_speed, speed))
-        current = round((self._motor.throttle or 0) * max_speed)
-        if speed > current:
-            new_speed = min(speed, current + step)
-        elif speed < current:
-            new_speed = max(speed, current - step)
-        else:
-            return
-        self._motor.throttle = new_speed / max_speed
-        print(f"Current speed: {new_speed} (requested: {speed})")
+
+        now = time.monotonic()
+        dt = now - self._last_update
+        self._last_update = now
+
+        step = rate * dt
+        if speed > self._current_speed:
+            self._current_speed = min(float(speed), self._current_speed + step)
+        elif speed < self._current_speed:
+            self._current_speed = max(float(speed), self._current_speed - step)
+
+        self._motor.throttle = self._current_speed / max_speed
+        print(f"Current speed: {self._current_speed:.1f} (requested: {speed})")
 
     def stop(self):
+        self._current_speed = 0.0
+        self._last_update = time.monotonic()
         self._motor.throttle = 0
 
     def cleanup(self):
