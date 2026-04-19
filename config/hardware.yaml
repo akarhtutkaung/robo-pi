@@ -26,6 +26,8 @@ servos:
   servo2:              # Head rotation up/down
     channel: 2
     center_angle: 90
+    max_down: 25
+    max_up: 135
 
 websocket:
   host: "0.0.0.0"     # Listen on all interfaces so Mac can connect over WiFi
