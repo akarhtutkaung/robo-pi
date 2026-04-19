@@ -62,3 +62,22 @@ STEP 5 — (Optional) Run as a systemd service so it starts on boot
         sudo systemctl enable robo-pi
         sudo systemctl start robo-pi
 """
+import argparse
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Robo-Pi Robot System")
+    parser.add_argument(
+        "--mode",
+        choices=["remote", "autonomous"],
+        default="remote",
+        help="Operating mode to run"
+    )
+    args = parser.parse_args()
+
+    if args.mode == "remote":
+        from src.core.modes.remote import run
+    elif args.mode == "autonomous":
+        print("[Coming Soon] Autonomous mode not implemented yet.")
+        from src.core.modes.autonomous import run  # Placeholder for future mode
+
+    run()

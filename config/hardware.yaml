@@ -4,13 +4,13 @@
 # Never hardcode pins in hardware files — always read from here.
 
 pca9685:
-  i2c_address: 0x5f   # Adeept default (not the standard 0x40)
+  i2c_address: 0x5f    # Adeept default (not the standard 0x40)
   frequency: 50        # PWM frequency in Hz
 
 motors:
   rear:
-    channel_in1: 0     # TODO: verify correct PCA9685 channel from examples/04_motor.py
-    channel_in2: 1     # TODO: verify correct PCA9685 channel from examples/04_motor.py
+    channel_in1: 15     # positive pole
+    channel_in2: 14     # negative pole
 
 servos:
   servo0:              # Front wheel steering (left / right)

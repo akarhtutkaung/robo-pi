@@ -59,3 +59,25 @@ NOTE:
     In the future, an autonomous.py mode will be added here that uses
     the camera and AI instead of WebSocket input.
 """
+
+import asyncio
+import signal
+from src.comms.websocket_server import start_server
+from src.navigation.controller import RobotController
+
+def run():
+    controller = RobotController()
+
+    def on_shutdown(sig, frame):
+        controller.cleanup()
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, on_shutdown)
+
+    try:
+        asyncio.run(start_server(controller))
+    except KeyboardInterrupt:
+        print("Shutting down...")
+    finally:
+        controller.cleanup()
+        print("Robot stopped safely.")

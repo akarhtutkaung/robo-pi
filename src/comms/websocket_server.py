@@ -73,3 +73,29 @@ NOTE:
     If you need multiple concurrent clients in the future, use
     asyncio.gather() to fan out, but that is not needed now.
 """
+
+import asyncio
+import websockets
+from src.core.config import WS_CFG
+
+async def on_connect(websocket, controller):
+    print(f"Client connected: {websocket.remote_address}")
+    try:
+        async for raw_message in websocket:
+            # await handle(websocket, raw_message, controller)
+            print(f"Received message: {raw_message}")
+    except websockets.exceptions.ConnectionClosed:
+        print("Client disconnected")
+
+async def start_server(controller):
+    host = WS_CFG["host"]
+    port = WS_CFG["port"]
+
+    async with websockets.serve(
+        lambda ws: on_connect(ws, controller),
+        host,
+        port
+    ):
+        print(f"WebSocket server listening on ws://{host}:{port}")
+        await asyncio.Future()  # keeps the server running forever
+
