@@ -23,6 +23,9 @@ class RobotController:
         self._motor = RearMotor(pca, MOTOR_CFG)
         self._servo = ServoController(pca, SERVO_CFG)
         self._servo.center_all()  # safe starting position
+    
+    def setSpeed(self, speed: int):
+        self._motor.set_speed(speed)
 
     def forward(self, speed: int = 50):
         self._motor.set_speed(speed)

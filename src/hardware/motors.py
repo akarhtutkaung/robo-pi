@@ -19,7 +19,7 @@ class RearMotor:
         )
 
     def set_speed(self, speed: int):
-        speed = max(0, min(100, speed))
+        speed = max(-100, min(100, speed))
         throttle = speed / 100.0
         self._motor.throttle = throttle
 

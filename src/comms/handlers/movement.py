@@ -18,10 +18,8 @@ async def handle(websocket, raw: str, controller: RobotController):
     speed  = msg.get("speed", 0)
 
     if action == "throttle":
-        if speed > 0:
-            controller.forward(speed)
-        elif speed < 0:
-            controller.backward(speed)
+        if speed != 0:
+            controller.setSpeed(speed)
         else:
             controller.stop()
     elif action == "steer":
