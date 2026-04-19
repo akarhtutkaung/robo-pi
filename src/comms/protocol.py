@@ -29,9 +29,11 @@ def parse_message(raw: str) -> dict:
         if direction not in VALID_DIRECTIONS:
             raise ValueError(f"Unknown direction: {direction!r}")
         speed = abs(int(data.get("speed", 50))) 
+        if direction == "backward":
+            speed = -speed
         return {
             "action": "throttle",
-            "speed": -speed if direction == "backward" else speed,
+            "speed": speed,
         }
 
     if action == "steer":

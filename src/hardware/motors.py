@@ -13,14 +13,16 @@ from adafruit_motor import motor as adafruit_motor
 class RearMotor:
     def __init__(self, pca, motor_cfg):
         self._pca = pca
+        self._motor_cfg = motor_cfg
         self._motor = adafruit_motor.DCMotor(
             self._pca.channels[motor_cfg["rear"]["channel_in1"]],
             self._pca.channels[motor_cfg["rear"]["channel_in2"]]
         )
 
     def set_speed(self, speed: int):
-        speed = max(-100, min(100, speed))
-        throttle = speed / 100.0
+        max_speed = self._motor_cfg["rear"]["max_speed"]
+        speed = max(-max_speed, min(max_speed, speed))
+        throttle = speed / max_speed
         self._motor.throttle = throttle
 
     def stop(self):
