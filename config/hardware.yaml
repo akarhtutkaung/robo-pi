@@ -11,21 +11,30 @@ motors:
   rear:
     channel_in1: 15     # positive pole
     channel_in2: 14     # negative pole
+    max_speed: 14
+    accelerate_rate: 10   # Acceleration rate in units/second (60 = full speed in ~0.5s)
+    decelerate_rate: 30   # Deceleration rate in units/second (higher for quicker stops)
 
 servos:
   servo0:              # Front wheel steering (left / right)
     channel: 0         # TODO: verify correct PCA9685 channel from examples/03_servo.py
-    center_angle: 90   # Straight ahead
-    max_left: 45       # Maximum left turn angle
-    max_right: 135     # Maximum right turn angle
+    center_angle: 72   # Straight ahead
+    max_angle: 25      # Maximum right turn angle
+    min_angle: 123     # Maximum left turn angle
+    step_size: 5       # Angle change step size for smoother steering
 
   servo1:              # Head rotation left/right
     channel: 1
     center_angle: 90
+    max_angle: 30       # Maximum right turn angle
+    min_angle: 150     # Maximum left turn angle
+    step_size: 5       # Angle change step size for smoother steering
 
   servo2:              # Head rotation up/down
     channel: 2
-    center_angle: 90
+    center_angle: 70
+    max_angle: 25
+    min_angle: 135
 
 websocket:
   host: "0.0.0.0"     # Listen on all interfaces so Mac can connect over WiFi

@@ -50,6 +50,7 @@ robo-pi/
 │   │   ├── websocket_server.py    # Local WebSocket server
 │   │   ├── protocol.py            # Message schema (command types, payloads)
 │   │   └── handlers/
+│   │       ├── dispatch.py        # Central router — routes by "type" field to domain handler
 │   │       ├── movement.py        # Handle drive/steer commands from remote
 │   │       └── query.py           # Handle state/sensor queries from remote
 │   └── core/
@@ -69,7 +70,7 @@ The `src/core/modes/` distinction maps directly to the two ways a feature (e.g. 
 | Mode | Flow | When to use |
 |------|------|-------------|
 | **autonomous** | camera → `perception/vision/gesture.py` → `navigation/controller.py` → hardware | Pi runs standalone, no network needed |
-| **remote** | WebSocket message → `comms/handlers/movement.py` → `navigation/controller.py` → hardware | Controlled from another device over local WiFi |
+| **remote** | WebSocket message → `comms/handlers/dispatch.py` → domain handler → `navigation/controller.py` → hardware | Controlled from another device over local WiFi |
 
 Both modes share the same `hardware/` and `navigation/controller.py` — only the input source differs.
 
@@ -78,7 +79,15 @@ Both modes share the same `hardware/` and `navigation/controller.py` — only th
 The system is being built incrementally:
 
 - **Motor/movement control** — `src/hardware/motors.py`, `src/hardware/servos.py`, `src/navigation/controller.py`
+  - `RearMotor.set_speed()` ramps using `accelerate_rate * dt` (time-based, not per-message)
+  - `RearMotor.smooth_stop()` ramps to zero using `decelerate_rate * dt` at 50 Hz
+  - `RearMotor.stop()` is a hard immediate cut — reserved for disconnect/emergency only
 - **WebSocket server** — `src/comms/websocket_server.py` + `src/comms/protocol.py`
+  - Idle timeout (`IDLE_TIMEOUT = 0.3s`): triggers `smooth_stop()` if no messages received; connection stays alive
+  - Non-blocking dispatch: each message is handled via `asyncio.create_task()` so the recv loop never blocks
+  - Latest-wins cancellation: a new incoming message cancels any in-flight handler task before starting the next
+  - Message routing: all messages go through `dispatch.py` which routes by `"type"` field (default: `"movement"`)
+  - Adding a new handler type: import the module and add one entry to `HANDLERS` in `dispatch.py`
 - **Camera + streaming** — `src/perception/camera.py`, `src/perception/vision/stream.py`
 - **AI integration** — `src/ai/inference.py`
 - **Gesture control** — `src/perception/vision/gesture.py`
@@ -91,7 +100,7 @@ All hardware communicates through I2C, GPIO, or SPI on the Raspberry Pi.
 
 | Bus | Device | Address | Usage |
 |-----|--------|---------|-------|
-| I2C | PCA9685 PWM | `0x5f` | Motors (4x DC), servos |
+| I2C | PCA9685 PWM | `0x5f` | Motors (4x DC), servos — config keys: `max_speed`, `accelerate_rate`, `decelerate_rate` (all units/sec) |
 | I2C | ADS7830 ADC | `0x48` | Light tracking, battery voltage |
 | GPIO | Various | — | LEDs, buzzer, ultrasonic, line tracking |
 | PWM GPIO 12 | WS2812 | — | NeoPixel LED strip (not supported on RPi 5) |
