@@ -9,6 +9,7 @@ Message format:
 """
 
 import json
+import websockets
 from src.comms.handlers import movement
 from src.comms.protocol import build_response
 
@@ -30,4 +31,7 @@ async def handle(websocket, raw: str, controller):
         await websocket.send(build_response("error", f"Unknown type: {handler_type!r}"))
         return
 
-    await handler(websocket, raw, controller)
+    try:
+        await handler(websocket, raw, controller)
+    except websockets.exceptions.ConnectionClosed:
+        pass
