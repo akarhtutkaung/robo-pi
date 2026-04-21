@@ -78,7 +78,11 @@ Both modes share the same `hardware/` and `navigation/controller.py` — only th
 The system is being built incrementally:
 
 - **Motor/movement control** — `src/hardware/motors.py`, `src/hardware/servos.py`, `src/navigation/controller.py`
+  - `RearMotor.set_speed()` ramps using `accelerate_rate * dt` (time-based, not per-message)
+  - `RearMotor.smooth_stop()` ramps to zero using `decelerate_rate * dt` at 50 Hz
+  - `RearMotor.stop()` is a hard immediate cut — reserved for disconnect/emergency only
 - **WebSocket server** — `src/comms/websocket_server.py` + `src/comms/protocol.py`
+  - Idle timeout (`IDLE_TIMEOUT = 0.5s`): triggers `smooth_stop()` if no messages received; connection stays alive
 - **Camera + streaming** — `src/perception/camera.py`, `src/perception/vision/stream.py`
 - **AI integration** — `src/ai/inference.py`
 - **Gesture control** — `src/perception/vision/gesture.py`
@@ -91,7 +95,7 @@ All hardware communicates through I2C, GPIO, or SPI on the Raspberry Pi.
 
 | Bus | Device | Address | Usage |
 |-----|--------|---------|-------|
-| I2C | PCA9685 PWM | `0x5f` | Motors (4x DC), servos |
+| I2C | PCA9685 PWM | `0x5f` | Motors (4x DC), servos — config keys: `max_speed`, `accelerate_rate`, `decelerate_rate` (all units/sec) |
 | I2C | ADS7830 ADC | `0x48` | Light tracking, battery voltage |
 | GPIO | Various | — | LEDs, buzzer, ultrasonic, line tracking |
 | PWM GPIO 12 | WS2812 | — | NeoPixel LED strip (not supported on RPi 5) |
