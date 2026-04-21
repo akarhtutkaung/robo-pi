@@ -21,7 +21,7 @@ class ServoController:
         self._cfg = servo_cfg
 
     def set_angle(self, servo_name: str, angle: int):
-        angle = max(0, min(180, angle))
+        angle = max(self._cfg[servo_name]["max_angle"], min(self._cfg[servo_name]["min_angle"], angle))
         self._servos[servo_name].angle = angle
 
     def center(self, servo_name: str):
@@ -30,6 +30,9 @@ class ServoController:
     def center_all(self):
         for name in self._servos:
             self.center(name)
+
+    def is_stopped(self, servo_name: str):
+        return abs(self._servos[servo_name].angle - self._cfg[servo_name]["center_angle"]) < 1
 
     def cleanup(self):
         self.center_all()

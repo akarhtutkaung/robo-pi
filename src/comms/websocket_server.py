@@ -9,7 +9,7 @@ import websockets
 from src.comms.handlers.movement import handle
 from src.core.config import WS_CFG
 
-IDLE_TIMEOUT = 0.5  # seconds before stopping if no message received
+IDLE_TIMEOUT = 0.3  # seconds before stopping if no message received
 
 async def on_connect(websocket, controller):
     print(f"Client connected: {websocket.remote_address}")
@@ -20,7 +20,8 @@ async def on_connect(websocket, controller):
                 print(f"Received message: {raw_message}")
                 await handle(websocket, raw_message, controller)
             except asyncio.TimeoutError:
-                await controller.smooth_stop()
+                if not controller.is_stopped():
+                    await controller.smooth_stop()
     except websockets.exceptions.ConnectionClosed:
         pass
     finally:

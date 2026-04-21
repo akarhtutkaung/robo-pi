@@ -65,3 +65,6 @@ class RearMotor:
 
     def cleanup(self):
         self._pca.deinit()
+
+    def is_stopped(self):
+        return abs(self._current_speed) < 0.1

@@ -18,20 +18,23 @@ motors:
 servos:
   servo0:              # Front wheel steering (left / right)
     channel: 0         # TODO: verify correct PCA9685 channel from examples/03_servo.py
-    center_angle: 90   # Straight ahead
-    max_left: 30       # Maximum left turn angle
-    max_right: 150     # Maximum right turn angle
+    center_angle: 72   # Straight ahead
+    max_angle: 25      # Maximum right turn angle
+    min_angle: 123     # Maximum left turn angle
     step_size: 5       # Angle change step size for smoother steering
 
   servo1:              # Head rotation left/right
     channel: 1
     center_angle: 90
+    max_angle: 30       # Maximum right turn angle
+    min_angle: 150     # Maximum left turn angle
+    step_size: 5       # Angle change step size for smoother steering
 
   servo2:              # Head rotation up/down
     channel: 2
     center_angle: 90
-    max_down: 25
-    max_up: 135
+    max_angle: 25
+    min_angle: 135
 
 websocket:
   host: "0.0.0.0"     # Listen on all interfaces so Mac can connect over WiFi

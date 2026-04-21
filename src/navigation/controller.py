@@ -35,7 +35,7 @@ class RobotController:
 
     def steer(self, angle: int):
         cfg = SERVO_CFG["servo0"]
-        angle = max(cfg["max_left"], min(cfg["max_right"], angle))
+        angle = max(cfg["max_angle"], min(cfg["min_angle"], angle))
         self._servo.set_angle("servo0", angle)
 
     async def smooth_stop(self):
@@ -45,6 +45,9 @@ class RobotController:
     def stop(self):
         self._motor.stop()
         self._servo.center("servo0")
+
+    def is_stopped(self):
+        return self._motor.is_stopped() and self._servo.is_stopped("servo0")
 
     def cleanup(self):
         self.stop()
