@@ -3,7 +3,8 @@ Central dispatcher — routes incoming messages to the correct domain handler
 based on the "type" field. Add new handlers here as new capabilities are built.
 
 Message format:
-    {"type": "movement", "action": "throttle", ...}
+    {"type": "movement", "action": "throttle", "direction": "forward", "speed": 50}
+    {"type": "movement", "action": "steer", "angle": 72}
     {"type": "vision",   "action": "gesture",  ...}  # future
     {"type": "voice",    "action": "command",   ...}  # future
 """
