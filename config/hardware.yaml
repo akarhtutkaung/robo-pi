@@ -32,7 +32,7 @@ servos:
 
   servo2:              # Head rotation up/down
     channel: 2
-    center_angle: 90
+    center_angle: 70
     max_angle: 25
     min_angle: 135
 
