@@ -11,7 +11,7 @@ Examples:
 """
 import json
 
-VALID_ACTIONS = {"throttle", "steer", "stop"}
+VALID_ACTIONS = {"throttle", "steer", "camera-x", "camera-y", "stop"}
 VALID_DIRECTIONS = {"forward", "backward"}
 
 def parse_message(raw: str) -> dict:
@@ -22,11 +22,13 @@ def parse_message(raw: str) -> dict:
 
     action = data.get("action")
     if action not in VALID_ACTIONS:
+        print(f"Received unknown action: {action!r}")
         raise ValueError(f"Unknown action: {action!r}")
 
     if action == "throttle":
         direction = data.get("direction")
         if direction not in VALID_DIRECTIONS:
+            print(f"Received unknown direction: {direction!r}")
             raise ValueError(f"Unknown direction: {direction!r}")
         speed = abs(int(data.get("speed", 50))) 
         if direction == "backward":
@@ -39,6 +41,15 @@ def parse_message(raw: str) -> dict:
     if action == "steer":
         angle = int(data.get("angle", 90)) 
         return {"action": "steer", "angle": angle}
+
+    if action == "camera-x":
+        angle = int(data.get("angle", 90))
+        print("Parsed camera-x angle: %d", angle)
+        return {"action": "camera-x", "angle": angle}
+
+    if action == "camera-y":
+        angle = int(data.get("angle", 90))
+        return {"action": "camera-y", "angle": angle}
 
     return {"action": "stop"}
 

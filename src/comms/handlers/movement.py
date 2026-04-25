@@ -26,11 +26,11 @@ async def handle(websocket, raw: str, controller: RobotController):
         angle = msg.get("angle", 90)
         controller.steer(angle)
     elif action == "camera-x":
-        degree = msg.get("degree", 0)
-        controller.move_camera_x(degree)
+        angle = msg.get("angle", 90)
+        controller.move_camera_x(angle)
     elif action == "camera-y":
-        degree = msg.get("degree", 0)
-        controller.move_camera_y(degree)
+        angle = msg.get("angle", 90)
+        controller.move_camera_y(angle)
     elif action == "stop":
         await controller.smooth_stop()
 
