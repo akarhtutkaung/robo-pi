@@ -38,6 +38,18 @@ class RobotController:
         angle = max(cfg["max_angle"], min(cfg["min_angle"], angle))
         self._servo.set_angle("servo0", angle)
 
+    def move_camera_x(self, degree: int):
+        cfg = SERVO_CFG["servo1"]
+        current_angle = self._servo._servos["servo1"].angle or SERVO_CFG["servo1"]["center_angle"]
+        new_angle = max(cfg["min_angle"], min(cfg["max_angle"], current_angle + degree))
+        self._servo.set_angle("servo1", new_angle)
+
+    def move_camera_y(self, degree: int):
+        cfg = SERVO_CFG["servo2"]
+        current_angle = self._servo._servos["servo2"].angle or SERVO_CFG["servo2"]["center_angle"]
+        new_angle = max(cfg["min_angle"], min(cfg["max_angle"], current_angle + degree))
+        self._servo.set_angle("servo2", new_angle)
+
     async def smooth_stop(self):
         await self._motor.smooth_stop()
         self._servo.center("servo0")
