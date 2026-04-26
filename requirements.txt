@@ -8,5 +8,12 @@ adafruit-circuitpython-motor
 # WebSocket server
 websockets
 
+# WebRTC (camera streaming)
+# aiortc pulls in av (PyAV) for video frame handling
+aiortc
+
+# Pi camera capture (Raspberry Pi only)
+picamera2
+
 # Config file parsing
 pyyaml
