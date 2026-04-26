@@ -14,7 +14,9 @@ class ServoController:
         self._servos = {
             name: adafruit_servo.Servo(
                 pca.channels[cfg["channel"]],
-                actuation_range=180
+                actuation_range=180,
+                min_pulse=500, 
+                max_pulse=2500
             )
             for name, cfg in servo_cfg.items()
         }
@@ -25,12 +27,14 @@ class ServoController:
         current_angle = self._servos[servo_name].angle
         new_angle = max(cfg["max_angle"], min(cfg["min_angle"], current_angle + degree))
         self._servos[servo_name].angle = new_angle
+        print(f"{servo_name} angle increased to {new_angle} (requested: {degree})")
 
     def decrease_angle(self, servo_name: str, degree: int):
         cfg = self._cfg[servo_name]
         current_angle = self._servos[servo_name].angle
         new_angle = max(cfg["max_angle"], min(cfg["min_angle"], current_angle - degree))
         self._servos[servo_name].angle = new_angle
+        print(f"{servo_name} angle increased to {new_angle} (requested: {degree})")
 
     def set_angle(self, servo_name: str, angle: int):
         angle = max(self._cfg[servo_name]["max_angle"], min(self._cfg[servo_name]["min_angle"], angle))
