@@ -6,7 +6,7 @@ Message fields:
 """
 import json
 
-VALID_ACTIONS = {"camera-x", "camera-y"}
+VALID_ACTIONS = {"camera-x", "camera-y", "center"}
 
 def parse_message(raw: str) -> dict:
     try:
@@ -18,4 +18,6 @@ def parse_message(raw: str) -> dict:
     if action not in VALID_ACTIONS:
         raise ValueError(f"Unknown vision action: {action!r}")
 
-    return {"action": action, "angle": int(data.get("angle", 90))}
+    if action != "center":
+        return {"action": action, "angle": int(data.get("angle", 90))}
+    return {"action": "center"}
