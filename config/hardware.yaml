@@ -39,3 +39,7 @@ servos:
 websocket:
   host: "0.0.0.0"     # Listen on all interfaces so Mac can connect over WiFi
   port: 8765
+
+webrtc:
+  host: "0.0.0.0"
+  port: 8766           # Signaling WS — WebRTC video negotiation only
