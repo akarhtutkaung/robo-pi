@@ -50,9 +50,12 @@ class RobotController:
         self._servo.center("servo1")
         self._servo.center("servo2")
 
+    def center_steering(self):
+        self._servo.center("servo0")
+
     async def smooth_stop(self):
         await self._motor.smooth_stop()
-        self._servo.center("servo0")
+        self.center_steering
 
     def force_stop(self):
         self._motor.stop()
