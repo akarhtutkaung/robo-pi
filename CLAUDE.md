@@ -29,9 +29,9 @@ robo-pi/
 │   │       ├── light_tracking.py  # ADC light sensors (ADS7830)
 │   │       └── battery.py         # Battery voltage monitoring
 │   ├── perception/                # Sensor data → interpreted signals
-│   │   ├── camera.py              # Pi camera capture and frame management
+│   │   ├── camera.py              # CameraVideoTrack — picamera2 YUV420 → aiortc VideoStreamTrack
 │   │   ├── vision/
-│   │   │   ├── stream.py          # Video streaming (for remote viewing)
+│   │   │   ├── stream.py          # configure_h264(pc) — forces H.264 codec on RTCPeerConnection
 │   │   │   ├── gesture.py         # Hand gesture → movement command
 │   │   │   └── object_detection.py
 │   │   └── speech/
@@ -47,7 +47,8 @@ robo-pi/
 │   │   ├── inference.py           # Run on-device AI models
 │   │   └── models/                # Model weight files (gitignored if large)
 │   ├── comms/                     # WebSocket communication layer
-│   │   ├── websocket_server.py    # Local WebSocket server
+│   │   ├── websocket_server.py    # Control WebSocket server (port 8765)
+│   │   ├── webrtc_server.py       # WebRTC signaling WS (port 8766) + camera stream
 │   │   ├── protocols/             # Per-domain message schemas and parsing
 │   │   │   ├── base.py            # build_response() — shared by all handlers
 │   │   │   ├── movement.py        # throttle, steer, stop
@@ -63,7 +64,7 @@ robo-pi/
 │       ├── config.py              # Loads and exposes config/hardware.yaml
 │       └── modes/
 │           ├── autonomous.py      # Pi processes locally: perception → decision → action
-│           └── remote.py          # WebSocket drives actions: comms → handler → hardware
+│           └── remote.py          # Runs control WS + WebRTC signaling WS concurrently
 ├── tests/
 └── examples/                      # Adeept reference scripts — read-only hardware reference
 ```
@@ -94,7 +95,13 @@ The system is being built incrementally:
   - Message routing: all messages go through `dispatch.py` which routes by `"type"` field (default: `"movement"`)
   - Message types: `"movement"` → `handlers/movement.py`, `"vision"` → `handlers/vision.py`
   - Adding a new handler type: create `protocols/<domain>.py` + `handlers/<domain>.py`, then add one entry to `HANDLERS` in `dispatch.py`
-- **Camera + streaming** — `src/perception/camera.py`, `src/perception/vision/stream.py`
+  - WebRTC signaling runs on a separate port (8766) and is independent of this server
+- **Camera + WebRTC streaming** — `src/perception/camera.py`, `src/perception/vision/stream.py`, `src/comms/webrtc_server.py`
+  - `CameraVideoTrack` captures YUV420 frames via picamera2 and feeds them to aiortc
+  - `configure_h264(pc)` in `stream.py` forces H.264 codec on the `RTCPeerConnection` before SDP negotiation — must be called after `addTrack()` and before `setRemoteDescription()`
+  - `webrtc_server.py` runs a WebSocket signaling server on port 8766; handles SDP offer/answer (vanilla ICE — Pi waits for full ICE gathering before sending answer)
+  - Ports: 8765 = control WS, 8766 = WebRTC signaling WS
+  - Both servers run concurrently via `asyncio.gather()` in `remote.py`
 - **AI integration** — `src/ai/inference.py`
 - **Gesture control** — `src/perception/vision/gesture.py`
 - **SLAM** — `src/navigation/slam/`
