@@ -48,10 +48,15 @@ robo-pi/
 │   │   └── models/                # Model weight files (gitignored if large)
 │   ├── comms/                     # WebSocket communication layer
 │   │   ├── websocket_server.py    # Local WebSocket server
-│   │   ├── protocol.py            # Message schema (command types, payloads)
+│   │   ├── protocols/             # Per-domain message schemas and parsing
+│   │   │   ├── base.py            # build_response() — shared by all handlers
+│   │   │   ├── movement.py        # throttle, steer, stop
+│   │   │   ├── vision.py          # camera-x, camera-y (future: gesture, stream)
+│   │   │   └── voice.py           # command/text — placeholder for sherpa-ncnn
 │   │   └── handlers/
 │   │       ├── dispatch.py        # Central router — routes by "type" field to domain handler
-│   │       ├── movement.py        # Handle drive/steer commands from remote
+│   │       ├── movement.py        # Handle throttle/steer/stop (type: "movement")
+│   │       ├── vision.py          # Handle camera pan/tilt (type: "vision")
 │   │       └── query.py           # Handle state/sensor queries from remote
 │   └── core/
 │       ├── robot.py               # Top-level Robot class — wires all modules together
@@ -82,12 +87,13 @@ The system is being built incrementally:
   - `RearMotor.set_speed()` ramps using `accelerate_rate * dt` (time-based, not per-message)
   - `RearMotor.smooth_stop()` ramps to zero using `decelerate_rate * dt` at 50 Hz
   - `RearMotor.stop()` is a hard immediate cut — reserved for disconnect/emergency only
-- **WebSocket server** — `src/comms/websocket_server.py` + `src/comms/protocol.py`
+- **WebSocket server** — `src/comms/websocket_server.py`
   - Idle timeout (`IDLE_TIMEOUT = 0.3s`): triggers `smooth_stop()` if no messages received; connection stays alive
   - Non-blocking dispatch: each message is handled via `asyncio.create_task()` so the recv loop never blocks
   - Latest-wins cancellation: a new incoming message cancels any in-flight handler task before starting the next
   - Message routing: all messages go through `dispatch.py` which routes by `"type"` field (default: `"movement"`)
-  - Adding a new handler type: import the module and add one entry to `HANDLERS` in `dispatch.py`
+  - Message types: `"movement"` → `handlers/movement.py`, `"vision"` → `handlers/vision.py`
+  - Adding a new handler type: create `protocols/<domain>.py` + `handlers/<domain>.py`, then add one entry to `HANDLERS` in `dispatch.py`
 - **Camera + streaming** — `src/perception/camera.py`, `src/perception/vision/stream.py`
 - **AI integration** — `src/ai/inference.py`
 - **Gesture control** — `src/perception/vision/gesture.py`

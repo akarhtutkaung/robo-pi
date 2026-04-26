@@ -38,13 +38,31 @@ class RobotController:
         angle = max(cfg["max_angle"], min(cfg["min_angle"], angle))
         self._servo.set_angle("servo0", angle)
 
+    def move_camera(self, axis: str, angle: int):
+        servo_name = "servo1" if axis == "x" else "servo2"
+        abs_angle = abs(angle)  # convert to positive for hardware call
+        if angle >= 0:
+            self._servo.increase_angle(servo_name, abs_angle)
+        else:
+            self._servo.decrease_angle(servo_name, abs_angle)
+        
+    def center_camera(self):
+        self._servo.center("servo1")
+        self._servo.center("servo2")
+
     async def smooth_stop(self):
         await self._motor.smooth_stop()
         self._servo.center("servo0")
 
-    def stop(self):
+    def force_stop(self):
         self._motor.stop()
         self._servo.center("servo0")
+        self._servo.center("servo1")
+        self._servo.center("servo2")
+    
+    def stop(self):
+        self.smooth_stop()
+        self.center_camera()
 
     def is_stopped(self):
         return self._motor.is_stopped() and self._servo.is_stopped("servo0")

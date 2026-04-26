@@ -1,10 +1,10 @@
 """
-Receives a parsed message dict and translates it into a controller call.
-This is the bridge between the WebSocket layer and the navigation layer.
-It knows about actions and speed but never touches hardware directly.
+Handles drive commands routed from dispatch under type "movement".
+Bridge between the WebSocket layer and the navigation layer.
+Never touches hardware directly.
 """
-
-from src.comms.protocol import parse_message, build_response
+from src.comms.protocols.movement import parse_message
+from src.comms.protocols.base import build_response
 from src.navigation.controller import RobotController
 
 async def handle(websocket, raw: str, controller: RobotController):
@@ -15,16 +15,15 @@ async def handle(websocket, raw: str, controller: RobotController):
         return
 
     action = msg["action"]
-    speed  = msg.get("speed", 0)
 
     if action == "throttle":
+        speed = msg.get("speed", 0)
         if speed != 0:
             controller.setSpeed(speed)
         else:
             await controller.smooth_stop()
     elif action == "steer":
-        angle = msg.get("angle", 90)
-        controller.steer(angle)
+        controller.steer(msg.get("angle", 90))
     elif action == "stop":
         await controller.smooth_stop()
 

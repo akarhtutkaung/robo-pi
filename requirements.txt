@@ -4,9 +4,17 @@
 # Hardware (Adafruit PCA9685 PWM controller + motor/servo abstractions)
 adafruit-circuitpython-pca9685
 adafruit-circuitpython-motor
+rpi-lgpio
 
 # WebSocket server
 websockets
+
+# WebRTC (camera streaming)
+aiohttp==3.10.* # WebRTC (camera streaming)
+aiortc>=1.14.0
+
+# Pi camera capture (Raspberry Pi only)
+picamera2
 
 # Config file parsing
 pyyaml
