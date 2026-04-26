@@ -3,11 +3,13 @@ Handles drive commands routed from dispatch under type "movement".
 Bridge between the WebSocket layer and the navigation layer.
 Never touches hardware directly.
 """
+import asyncio
 from src.comms.protocols.movement import parse_message
 from src.comms.protocols.base import build_response
 from src.navigation.controller import RobotController
 
 async def handle(websocket, raw: str, controller: RobotController):
+    await asyncio.sleep(0)  # yield so CancelledError fires before any hardware command
     try:
         msg = parse_message(raw)
     except ValueError as e:

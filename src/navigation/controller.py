@@ -55,7 +55,6 @@ class RobotController:
 
     async def smooth_stop(self):
         await self._motor.smooth_stop()
-        self.center_steering
 
     def force_stop(self):
         self._motor.stop()
