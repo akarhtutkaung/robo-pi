@@ -1,12 +1,12 @@
 """
 Vision protocol — camera pan/tilt, future: gesture, object detection stream.
 Message fields:
-    {"action": "camera-x", "angle": <int>}
-    {"action": "camera-y", "angle": <int>}
+    {"action": "move", "axis": "<x|y>", "angle": <+|-int>}
+    {"action": "center"}
 """
 import json
 
-VALID_ACTIONS = {"camera-x", "camera-y", "center"}
+VALID_ACTIONS = {"move", "center"}
 
 def parse_message(raw: str) -> dict:
     try:
@@ -19,5 +19,5 @@ def parse_message(raw: str) -> dict:
         raise ValueError(f"Unknown vision action: {action!r}")
 
     if action != "center":
-        return {"action": action, "angle": int(data.get("angle", 90))}
+        return {"action": action, "axis": data.get("axis"), "angle": int(data.get("angle", 90))}
     return {"action": "center"}

@@ -38,24 +38,13 @@ class RobotController:
         angle = max(cfg["max_angle"], min(cfg["min_angle"], angle))
         self._servo.set_angle("servo0", angle)
 
-    def move_camera_x(self, angle: int):
-        # cfg = SERVO_CFG["servo1"]
-        # current_angle = self._servo._servos["servo1"].angle or SERVO_CFG["servo1"]["center_angle"]
-        # new_angle = max(cfg["min_angle"], min(cfg["max_angle"], current_angle + degree))
-        # self._servo.set_angle("servo1", new_angle)
-        cfg = SERVO_CFG["servo1"]
-        angle = max(cfg["max_angle"], min(cfg["min_angle"], angle))
-        self._servo.set_angle("servo1", angle)
-
-    def move_camera_y(self, angle: int):
-        # cfg = SERVO_CFG["servo2"]
-        # current_angle = self._servo._servos["servo2"].angle or SERVO_CFG["servo2"]["center_angle"]
-        # new_angle = max(cfg["min_angle"], min(cfg["max_angle"], current_angle + degree))
-        # self._servo.set_angle("servo2", new_angle)
-        cfg = SERVO_CFG["servo2"]
-        angle = max(cfg["max_angle"], min(cfg["min_angle"], angle))
-        self._servo.set_angle("servo2", angle)
-
+    def move_camera(self, axis: str, angle: int):
+        servo_name = "servo1" if axis == "x" else "servo2"
+        if angle >= 0:
+            self._servo.increase_angle(servo_name, angle)
+        else:
+            self._servo.decrease_angle(servo_name, angle)
+        
     def center_camera(self):
         self._servo.center("servo1")
         self._servo.center("servo2")
