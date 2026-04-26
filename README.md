@@ -39,10 +39,15 @@ robo-pi/
 │   ├── ai/                        # On-device model inference
 │   ├── comms/                     # WebSocket communication layer
 │   │   ├── websocket_server.py
-│   │   ├── protocol.py            # Message schema
+│   │   ├── protocols/             # Per-domain message schemas and parsing
+│   │   │   ├── base.py            # Shared build_response()
+│   │   │   ├── movement.py        # throttle, steer, stop
+│   │   │   ├── vision.py          # camera-x, camera-y
+│   │   │   └── voice.py           # command/text (planned)
 │   │   └── handlers/
 │   │       ├── dispatch.py        # Routes messages by "type" field
-│   │       ├── movement.py
+│   │       ├── movement.py        # type: "movement"
+│   │       ├── vision.py          # type: "vision"
 │   │       └── query.py
 │   └── core/
 │       ├── robot.py
@@ -109,15 +114,22 @@ sudo systemctl start robo-pi
 
 ## WebSocket Protocol
 
-The server listens on `ws://<pi-ip>:8765`. All messages are JSON with a `"type"` field that routes to the correct handler (default: `"movement"`).
+The server listens on `ws://<pi-ip>:8765`. All messages are JSON and **must** include a `"type"` field — omitting it returns an error.
 
-### Movement messages
+### Movement messages (`"type": "movement"`)
 
 ```json
 { "type": "movement", "action": "throttle", "direction": "forward", "speed": 50 }
 { "type": "movement", "action": "throttle", "direction": "backward", "speed": 30 }
 { "type": "movement", "action": "steer", "angle": 30 }
 { "type": "movement", "action": "stop" }
+```
+
+### Vision messages (`"type": "vision"`)
+
+```json
+{ "type": "vision", "action": "camera-x", "angle": 90 }
+{ "type": "vision", "action": "camera-y", "angle": 45 }
 ```
 
 ### Behavior

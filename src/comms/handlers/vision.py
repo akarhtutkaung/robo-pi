@@ -20,5 +20,7 @@ async def handle(websocket, raw: str, controller: RobotController):
         controller.move_camera_x(angle)
     elif action == "camera-y":
         controller.move_camera_y(angle)
+    elif action == "center":
+        controller.center_camera()
 
     await websocket.send(build_response("ok", f"executed: {action}"))
