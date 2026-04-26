@@ -10,7 +10,6 @@ from aiortc import VideoStreamTrack
 from av import VideoFrame
 from picamera2 import Picamera2
 import numpy as np
-from src.core import config
 
 class CameraVideoTrack(VideoStreamTrack):
     kind = "video"
@@ -18,10 +17,10 @@ class CameraVideoTrack(VideoStreamTrack):
     def __init__(self, width=640, height=480):
         super().__init__()
         self._camera = Picamera2()
-        self._camera.create_video_configuration(
+        camera_config = self._camera.create_video_configuration(
             main={"size": (width, height), "format": "YUV420"}
         )
-        self._camera.configure(config)
+        self._camera.configure(camera_config)
         self._camera.start()
 
     async def recv(self):
