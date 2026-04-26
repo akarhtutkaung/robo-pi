@@ -40,10 +40,11 @@ class RobotController:
 
     def move_camera(self, axis: str, angle: int):
         servo_name = "servo1" if axis == "x" else "servo2"
+        abs_angle = abs(angle)  # convert to positive for hardware call
         if angle >= 0:
-            self._servo.increase_angle(servo_name, angle)
+            self._servo.increase_angle(servo_name, abs_angle)
         else:
-            self._servo.decrease_angle(servo_name, angle)
+            self._servo.decrease_angle(servo_name, abs_angle)
         
     def center_camera(self):
         self._servo.center("servo1")
