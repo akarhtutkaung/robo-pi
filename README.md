@@ -1,6 +1,6 @@
 # robo-pi
 
-Software system for an **Adeept PiCar-B Mars Rover** running on a Raspberry Pi. Built to support AI-integrated autonomous operation with camera vision, SLAM, and speech recognition — currently controllable over a local WebSocket connection.
+Software system for an **Adeept PiCar-B Mars Rover** running on a Raspberry Pi. Built to support AI-integrated autonomous operation with camera vision, SLAM, and speech recognition — currently controllable over a local WebSocket connection with live WebRTC camera streaming.
 
 ## Hardware
 
@@ -9,7 +9,7 @@ Software system for an **Adeept PiCar-B Mars Rover** running on a Raspberry Pi. 
 | Platform | Adeept PiCar-B (Raspberry Pi) |
 | Motor | Rear DC motor via PCA9685 PWM controller (`0x5f`) |
 | Servos | Steering (ch0), head L/R (ch1), head U/D (ch2) |
-| Camera | Pi Camera |
+| Camera | Pi Camera (picamera2 → WebRTC H.264 stream) |
 | Sensors | Ultrasonic (GPIO 23/24), line tracking (GPIO 22/27/17), light tracking (ADS7830 ADC `0x48`) |
 | LEDs | RGB LEDs (GPIO 9/25/11, 19/0/13, 1/5/6) + WS2812 strip |
 | Buzzer | GPIO 18 |
@@ -18,28 +18,29 @@ Software system for an **Adeept PiCar-B Mars Rover** running on a Raspberry Pi. 
 
 ```
 robo-pi/
-├── main.py                        # Entry point
+├── main.py                        # Entry point (--mode remote|autonomous)
 ├── config/
 │   ├── hardware.yaml              # GPIO pins, I2C addresses, PWM settings
 │   └── modes.yaml                 # Mode-specific settings
 ├── src/
 │   ├── hardware/                  # Low-level hardware drivers
-│   │   ├── motors.py              # Rear DC motor
+│   │   ├── motors.py              # Rear DC motor (smooth accel/decel via set_speed)
 │   │   ├── servos.py              # Steering + head servos
 │   │   ├── leds.py                # RGB LEDs + WS2812 strip
 │   │   ├── buzzer.py
 │   │   └── sensors/               # Ultrasonic, line, light, battery
 │   ├── perception/                # Sensor data → interpreted signals
-│   │   ├── camera.py
-│   │   └── vision/                # Streaming, gesture, object detection
+│   │   ├── camera.py              # CameraVideoTrack (picamera2 → aiortc)
+│   │   └── vision/                # stream.py (H.264 config), gesture, object detection
 │   ├── navigation/
 │   │   ├── controller.py          # High-level drive commands
 │   │   ├── planner.py
-│   │   └── slam/                  # Mapping + localization
-│   ├── ai/                        # On-device model inference
-│   ├── comms/                     # WebSocket communication layer
-│   │   ├── websocket_server.py
-│   │   ├── protocols/             # Per-domain message schemas and parsing
+│   │   └── slam/                  # Mapping + localization (planned)
+│   ├── ai/                        # On-device model inference (planned)
+│   ├── comms/
+│   │   ├── websocket_server.py    # Control WS server — port 8765
+│   │   ├── webrtc_server.py       # WebRTC signaling WS — port 8766
+│   │   ├── protocols/             # Per-domain message schemas
 │   │   │   ├── base.py            # Shared build_response()
 │   │   │   ├── movement.py        # throttle, steer, stop
 │   │   │   ├── vision.py          # camera-x, camera-y
@@ -53,7 +54,7 @@ robo-pi/
 │       ├── robot.py
 │       ├── config.py
 │       └── modes/
-│           ├── remote.py          # WebSocket-driven mode
+│           ├── remote.py          # Runs control WS + WebRTC signaling concurrently
 │           └── autonomous.py      # Standalone perception → action (planned)
 ├── tests/
 └── examples/                      # Adeept reference scripts (read-only)
@@ -112,9 +113,16 @@ sudo systemctl enable robo-pi
 sudo systemctl start robo-pi
 ```
 
+## Ports
+
+| Port | Protocol | Purpose |
+|------|----------|---------|
+| 8765 | WebSocket | Robot control messages |
+| 8766 | WebSocket | WebRTC signaling (SDP offer/answer) |
+
 ## WebSocket Protocol
 
-The server listens on `ws://<pi-ip>:8765`. All messages are JSON and **must** include a `"type"` field — omitting it returns an error.
+The control server listens on `ws://<pi-ip>:8765`. All messages are JSON. The `"type"` field is required — an unknown or missing type returns an error response.
 
 ### Movement messages (`"type": "movement"`)
 
@@ -141,8 +149,13 @@ The server listens on `ws://<pi-ip>:8765`. All messages are JSON and **must** in
 
 ```json
 { "status": "ok", "message": "" }
+{ "status": "error", "message": "Unknown type: ..." }
 { "status": "error", "message": "Invalid JSON" }
 ```
+
+## Camera Streaming
+
+The Pi streams video over WebRTC. The client connects to the signaling server at `ws://<pi-ip>:8766`, sends an SDP offer, and receives an H.264 answer. ICE gathering completes on the Pi before the answer is sent (vanilla ICE — no trickle).
 
 ## Configuration
 
@@ -153,13 +166,12 @@ Key motor parameters:
 | Key | Default | Description |
 |-----|---------|-------------|
 | `max_speed` | 14 | PCA9685 duty cycle ceiling |
-| `accelerate_rate` | 10 | Units/second for ramp-up |
-| `decelerate_rate` | 30 | Units/second for ramp-down (smooth stop) |
+| `accelerate_rate` | 10 | Units/sec ramp-up — applied as `rate × dt` per `set_speed()` call |
+| `decelerate_rate` | 30 | Units/sec ramp-down — applied at 50 Hz in `smooth_stop()` |
 
 ## Planned Features
 
 - Autonomous mode (perception → decision → action loop)
-- Camera streaming
 - Hand gesture control
 - SLAM (simultaneous localization and mapping)
 - Speech recognition via `sherpa-ncnn`
@@ -170,7 +182,11 @@ Key motor parameters:
 |---------|---------|
 | `adafruit-circuitpython-pca9685` | PCA9685 PWM controller (motors + servos) |
 | `adafruit-circuitpython-motor` | Motor abstractions |
+| `rpi-lgpio` | GPIO on Raspberry Pi 5 |
 | `websockets` | WebSocket server |
+| `aiortc` | WebRTC peer connection + media |
+| `aiohttp` | HTTP server used by aiortc |
+| `picamera2` | Pi Camera capture |
 | `pyyaml` | Config file parsing |
 
 > All hardware code requires a Raspberry Pi. Scripts importing `gpiozero`, `adafruit_pca9685`, or `rpi_ws281x` will not run on other platforms.

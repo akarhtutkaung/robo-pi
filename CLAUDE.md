@@ -85,14 +85,14 @@ Both modes share the same `hardware/` and `navigation/controller.py` — only th
 The system is being built incrementally:
 
 - **Motor/movement control** — `src/hardware/motors.py`, `src/hardware/servos.py`, `src/navigation/controller.py`
-  - `RearMotor.set_speed()` ramps using `accelerate_rate * dt` (time-based, not per-message)
-  - `RearMotor.smooth_stop()` ramps to zero using `decelerate_rate * dt` at 50 Hz
-  - `RearMotor.stop()` is a hard immediate cut — reserved for disconnect/emergency only
+  - `RearMotor.set_speed(speed)`: applies one ramp step per call — `step = accelerate_rate × dt` where `dt` is elapsed time since the last call. Called once per incoming message; step size shrinks when messages arrive fast.
+  - `RearMotor.smooth_stop()`: async coroutine — decelerates at 50 Hz using `decelerate_rate × 0.02s` per tick until speed < 0.1, then hard-stops.
+  - `RearMotor.stop()`: immediate hard cut (throttle = 0) — reserved for disconnect/emergency only.
+  - `RearMotor` takes an already-initialised `pca` object — it does not import or construct I2C/PCA9685 itself.
 - **WebSocket server** — `src/comms/websocket_server.py`
-  - Idle timeout (`IDLE_TIMEOUT = 0.3s`): triggers `smooth_stop()` if no messages received; connection stays alive
-  - Non-blocking dispatch: each message is handled via `asyncio.create_task()` so the recv loop never blocks
-  - Latest-wins cancellation: a new incoming message cancels any in-flight handler task before starting the next
-  - Message routing: all messages go through `dispatch.py` which routes by `"type"` field (default: `"movement"`)
+  - Idle timeout (`IDLE_TIMEOUT = 0.3s`): if no message arrives within 0.3 s, calls `smooth_stop()` when not already stopped; connection stays alive.
+  - Single in-flight task: each message cancels the previous `current_task` and creates a new one via `asyncio.create_task(handle(...))`, keeping the recv loop non-blocking.
+  - All message routing is delegated entirely to `dispatch.py` — `websocket_server.py` does no action-level parsing itself.
   - Message types: `"movement"` → `handlers/movement.py`, `"vision"` → `handlers/vision.py`
   - Adding a new handler type: create `protocols/<domain>.py` + `handlers/<domain>.py`, then add one entry to `HANDLERS` in `dispatch.py`
   - WebRTC signaling runs on a separate port (8766) and is independent of this server
@@ -113,7 +113,7 @@ All hardware communicates through I2C, GPIO, or SPI on the Raspberry Pi.
 
 | Bus | Device | Address | Usage |
 |-----|--------|---------|-------|
-| I2C | PCA9685 PWM | `0x5f` | Motors (4x DC), servos — config keys: `max_speed`, `accelerate_rate`, `decelerate_rate` (all units/sec) |
+| I2C | PCA9685 PWM | `0x5f` | Motors (4x DC), servos — motor config keys: `max_speed` (unitless throttle scale), `accelerate_rate` and `decelerate_rate` (units/sec applied per `set_speed` call or per 50 Hz tick in `smooth_stop`) |
 | I2C | ADS7830 ADC | `0x48` | Light tracking, battery voltage |
 | GPIO | Various | — | LEDs, buzzer, ultrasonic, line tracking |
 | PWM GPIO 12 | WS2812 | — | NeoPixel LED strip (not supported on RPi 5) |
