@@ -13,7 +13,7 @@ motors:
     channel_in2: 14     # negative pole
     max_speed: 14
     accelerate_rate: 10   # Acceleration rate in units/second (60 = full speed in ~0.5s)
-    decelerate_rate: 30   # Deceleration rate in units/second (higher for quicker stops)
+    decelerate_rate: 100  # Deceleration rate in units/second (higher for quicker stops)
 
 servos:
   servo0:              # Front wheel steering (left / right)

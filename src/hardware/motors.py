@@ -33,9 +33,13 @@ class RearMotor:
 
     async def _ramp_loop(self):
         max_speed = self._motor_cfg["rear"]["max_speed"]
-        rate = self._motor_cfg["rear"]["accelerate_rate"]
-        step = rate * _RAMP_DT
+        accel = self._motor_cfg["rear"]["accelerate_rate"]
+        decel = self._motor_cfg["rear"]["decelerate_rate"]
         while abs(self._current_speed - self._target_speed) >= 0.05:
+            # slowing down (toward zero) uses decel_rate; speeding up uses accel_rate
+            toward_zero = (self._current_speed > 0 and self._target_speed < self._current_speed) or \
+                          (self._current_speed < 0 and self._target_speed > self._current_speed)
+            step = (decel if toward_zero else accel) * _RAMP_DT
             if self._target_speed > self._current_speed:
                 self._current_speed = min(self._target_speed, self._current_speed + step)
             else:
