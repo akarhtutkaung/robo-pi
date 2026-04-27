@@ -7,6 +7,7 @@ and the Adafruit PCA9685 library for PWM signal generation.
 """
 
 import asyncio
+import time
 from adafruit_pca9685 import PCA9685
 from adafruit_motor import motor as adafruit_motor
 
