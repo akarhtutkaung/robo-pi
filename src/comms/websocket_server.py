@@ -18,17 +18,26 @@ async def on_connect(websocket, controller):
 
     # One idle task per action key — reset on every message, fires when silent
     idle_tasks: dict[str, asyncio.Task] = {}
-    # Last value written to hardware per action key — value-based dedup
+    # Latest desired value per action key (may not yet be written to hardware)
     last_values: dict[str, object] = {}
+    # Last value actually written to hardware per action key — value-based dedup
+    applied: dict[str, object] = {}
 
     async def action_idle(key: str):
         await asyncio.sleep(IDLE_TIMEOUT)
         idle_tasks.pop(key, None)
-        last_values.pop(key, None)
         action = key.split(":", 1)[-1]
-        if action == "throttle" and not controller.is_stopped():
-            await controller.smooth_stop()
+        if action == "throttle":
+            last_values.pop(key, None)
+            applied.pop(key, None)
+            if not controller.is_stopped():
+                await controller.smooth_stop()
         elif action == "steer":
+            # flush any desired angle that was skipped while buffer was non-empty
+            desired = last_values.pop(key, None)
+            was_applied = applied.pop(key, None)
+            if desired is not None and desired != was_applied:
+                controller.steer(desired)
             controller.center_steering()
 
     def reset_idle(key: str):
@@ -43,6 +52,7 @@ async def on_connect(websocket, controller):
                 task.cancel()
         idle_tasks.clear()
         last_values.clear()
+        applied.clear()
 
     try:
         while True:
@@ -62,21 +72,25 @@ async def on_connect(websocket, controller):
                 if msg_type == "movement":
                     if action == "steer":
                         angle = int(data.get("angle", 90))
-                        if last_values.get(key) != angle:
+                        last_values[key] = angle  # always record latest desired
+                        # latest-wins: skip I2C write if more messages are buffered
+                        if not websocket.messages and applied.get(key) != angle:
                             controller.steer(angle)
-                            last_values[key] = angle
+                            applied[key] = angle
                         reset_idle(key)
 
                     elif action == "throttle":
                         speed = abs(int(data.get("speed", 0)))
                         if data.get("direction") == "backward":
                             speed = -speed
-                        if last_values.get(key) != speed:
+                        last_values[key] = speed  # always record latest desired
+                        # latest-wins: skip hardware write if more messages are buffered
+                        if not websocket.messages and applied.get(key) != speed:
                             if speed != 0:
                                 controller.setSpeed(speed)
                             else:
                                 asyncio.create_task(controller.smooth_stop())
-                            last_values[key] = speed
+                            applied[key] = speed
                         reset_idle(key)
 
                     elif action == "stop":
@@ -87,6 +101,7 @@ async def on_connect(websocket, controller):
                             if t and not t.done():
                                 t.cancel()
                             last_values.pop(k, None)
+                            applied.pop(k, None)
 
                 else:
                     # Vision, voice, future types — dispatch to domain handler
