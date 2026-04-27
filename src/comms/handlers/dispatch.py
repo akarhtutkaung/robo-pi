@@ -11,6 +11,7 @@ Message format:
     {"type": "voice",    "action": "command",   ...}  # future
 """
 
+import asyncio
 import json
 import websockets
 from src.comms.handlers import movement, vision
@@ -22,6 +23,7 @@ HANDLERS = {
 }
 
 async def handle(websocket, raw: str, controller):
+    await asyncio.sleep(0)  # yield first; tasks cancelled before running exit here
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:

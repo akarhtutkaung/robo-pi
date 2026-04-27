@@ -34,7 +34,7 @@ class ServoController:
         new_angle = max(cfg["max_angle"], min(cfg["min_angle"], current_angle - degree))
         self._servos[servo_name].angle = new_angle
         
-    def set_angle(self, servo_name: str, angle: int):
+    def set_angle(self, servo_name: str, angle: float):
         angle = max(self._cfg[servo_name]["max_angle"], min(self._cfg[servo_name]["min_angle"], angle))
         self._servos[servo_name].angle = angle
 
