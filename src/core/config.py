@@ -16,3 +16,4 @@ MOTOR_CFG  = _cfg["motors"]    # rear motor channels
 SERVO_CFG  = _cfg["servos"]    # servo0/1/2 channels and angle limits
 WS_CFG     = _cfg["websocket"] # host and port
 WEBRTC_CFG = _cfg["webrtc"]    # host and port for WebRTC signaling WS
+ULTRASONIC_CFG = _cfg["ultrasonic"]  # trigger and echo pins

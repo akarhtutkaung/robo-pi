@@ -45,7 +45,11 @@ class RobotController:
             self._servo.increase_angle(servo_name, abs_angle)
         else:
             self._servo.decrease_angle(servo_name, abs_angle)
-        
+    
+    def move_camera_to(self, axis: str, angle: int):
+        servo_name = "servo1" if axis == "x" else "servo2"
+        self._servo.set_angle(servo_name, angle)
+
     def center_camera(self):
         self._servo.center("servo1")
         self._servo.center("servo2")
@@ -65,6 +69,9 @@ class RobotController:
     def stop(self):
         self.smooth_stop()
         self.center_camera()
+    
+    def force_stop_motors(self):
+        self._motor.stop()
 
     def is_stopped(self):
         return self._motor.is_stopped() and self._servo.is_stopped("servo0")

@@ -43,3 +43,10 @@ websocket:
 webrtc:
   host: "0.0.0.0"
   port: 8766           # Signaling WS — WebRTC video negotiation only
+
+ultrasonic:
+  trigger_pin: 23
+  echo_pin: 24
+  max_distance: 2   # Maximum distance to measure in m (adjust based on sensor specs)
+  stop_cm: 5       # Distance at which to stop
+  turn_cm: 20       # Distance at which to start turning
