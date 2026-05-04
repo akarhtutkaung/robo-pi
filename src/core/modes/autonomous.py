@@ -18,6 +18,7 @@ async def run_autonomous(controller, obstacle):
     try:
         while True:
             if obstacle.is_blocked():
+                print("Obstacle detected ahead! Initiating avoidance maneuvers.")
                 await controller.smooth_stop()
                 controller.backward(AUTONOMOUS_SPEED)  # back up a bit
                 await asyncio.sleep(1)                 # back up for 1 second
@@ -36,9 +37,17 @@ async def run_autonomous(controller, obstacle):
                 controller.center_camera()                # reset camera position
 
                 if right_blocked and not left_blocked:
+                    print("Obstacle on the right, turning left")
                     controller.steer(60)                # turn left to clear
                 elif left_blocked and not right_blocked:
+                    print("Obstacle on the left, turning right")
                     controller.steer(120)               # turn right to clear
-                controller.setSpeed(AUTONOMOUS_SPEED)
+                else:
+                    print("Obstacle ahead, but both sides are blocked. Moving back further.")
+                    controller.backward(AUTONOMOUS_SPEED)  # back up more
+                    await asyncio.sleep(1)                 # back up for another second
+            else:
+                controller.forward(AUTONOMOUS_SPEED)  # keep moving forward
+            await asyncio.sleep(0.1)  # small delay to prevent overwhelming the loop
     except asyncio.CancelledError:
         pass
