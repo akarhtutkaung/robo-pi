@@ -14,7 +14,6 @@ async def setup(controller):
     controller.center_camera()
 
 async def run_autonomous(controller, obstacle):
-    # """For now. Drive forward continuously until cancelled."""
     setup(controller)
     try:
         while True:
@@ -27,11 +26,11 @@ async def run_autonomous(controller, obstacle):
                 # Check left and right before turning to avoid getting stuck in a corner
                 # by moving camera and checking for obstacles in each direction. This is a simple heuristic
                 # and can be improved with more sophisticated logic or additional sensors.
-                controller.move_camera_to("x", 30)         # look right
+                controller.move_camera_to("x", 45)         # look right
                 await asyncio.sleep(0.5)                 # give camera time to move
                 right_blocked = obstacle.is_blocked()
                 
-                controller.move_camera_to("x", -30)        # look left
+                controller.move_camera_to("x", 135)        # look left
                 await asyncio.sleep(0.5)                 # give camera time to move
                 left_blocked = obstacle.is_blocked()
                 controller.center_camera()                # reset camera position
