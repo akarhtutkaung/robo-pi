@@ -14,7 +14,7 @@ async def setup(controller):
     controller.center_camera()
 
 async def run_autonomous(controller, obstacle):
-    setup(controller)
+    await setup(controller)
     try:
         while True:
             if obstacle.is_blocked():
@@ -22,7 +22,7 @@ async def run_autonomous(controller, obstacle):
                 await controller.smooth_stop()
                 controller.backward(AUTONOMOUS_SPEED)  # back up a bit
                 await asyncio.sleep(1)                 # back up for 1 second
-                controller.smooth_stop()
+                await controller.smooth_stop()
 
                 # Check left and right before turning to avoid getting stuck in a corner
                 # by moving camera and checking for obstacles in each direction. This is a simple heuristic
