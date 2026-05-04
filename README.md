@@ -136,9 +136,14 @@ The control server listens on `ws://<pi-ip>:8765`. All messages are JSON. The `"
 ### Vision messages (`"type": "vision"`)
 
 ```json
-{ "type": "vision", "action": "camera-x", "angle": 90 }
-{ "type": "vision", "action": "camera-y", "angle": 45 }
+{ "type": "vision", "action": "move", "axis": "x", "angle":  5 }
+{ "type": "vision", "action": "move", "axis": "x", "angle": -5 }
+{ "type": "vision", "action": "move", "axis": "y", "angle":  5 }
+{ "type": "vision", "action": "move", "axis": "y", "angle": -5 }
+{ "type": "vision", "action": "center" }
 ```
+
+`axis` — `"x"` for left/right, `"y"` for up/down. `angle` is a relative step in degrees — positive moves left/up, negative moves right/down. `center` returns the head to its home position.
 
 ### Behavior
 

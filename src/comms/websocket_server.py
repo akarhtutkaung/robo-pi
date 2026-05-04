@@ -2,6 +2,10 @@
 Runs a WebSocket server on the Pi that other devices connect to.
 Receives messages, passes each one to the movement handler.
 Stays alive as long as the program runs.
+
+Mode switching:
+    {"type": "mode", "action": "autonomous"} — start autonomous drive, ignore movement messages
+    {"type": "mode", "action": "manual"}     — stop autonomous drive, resume manual control
 """
 
 import asyncio
@@ -9,9 +13,9 @@ import json
 import websockets
 from src.comms.handlers.dispatch import handle as dispatch_handle
 from src.core.config import WS_CFG
+from src.core.modes.autonomous import run_autonomous
 
 IDLE_TIMEOUT = 0.3  # seconds before an action is considered stale
-
 
 async def on_connect(websocket, controller):
     print(f"Client connected: {websocket.remote_address}")
@@ -22,6 +26,9 @@ async def on_connect(websocket, controller):
     last_values: dict[str, object] = {}
     # Last value actually written to hardware per action key — value-based dedup
     applied: dict[str, object] = {}
+
+    current_mode = "manual"
+    autonomous_task: asyncio.Task | None = None
 
     async def action_idle(key: str):
         await asyncio.sleep(IDLE_TIMEOUT)
@@ -69,7 +76,31 @@ async def on_connect(websocket, controller):
                 action = data.get("action", "")
                 key = f"{msg_type}:{action}"
 
-                if msg_type == "movement":
+                if msg_type == "mode":
+                    requested = data.get("action", "")
+
+                    if requested == "autonomous" and current_mode != "autonomous":
+                        current_mode = "autonomous"
+                        cancel_all()
+                        controller.center_steering()
+                        if not controller.is_stopped():
+                            asyncio.create_task(controller.smooth_stop())
+                        autonomous_task = asyncio.create_task(run_autonomous(controller))
+                        print("[mode] Switched to autonomous")
+
+                    elif requested == "manual" and current_mode != "manual":
+                        current_mode = "manual"
+                        if autonomous_task and not autonomous_task.done():
+                            autonomous_task.cancel()
+                        autonomous_task = None
+                        controller.center_steering()
+                        asyncio.create_task(controller.smooth_stop())
+                        print("[mode] Switched to manual")
+
+                elif msg_type == "movement":
+                    if current_mode == "autonomous":
+                        continue  # ignore manual movement while autonomous
+
                     if action == "steer":
                         angle = int(data.get("angle", 90))
                         last_values[key] = angle  # always record latest desired
@@ -108,14 +139,17 @@ async def on_connect(websocket, controller):
                     asyncio.create_task(dispatch_handle(websocket, raw, controller))
 
             except asyncio.TimeoutError:
-                cancel_all()
-                controller.center_steering()
-                if not controller.is_stopped():
-                    await controller.smooth_stop()
+                if current_mode == "manual":
+                    cancel_all()
+                    controller.center_steering()
+                    if not controller.is_stopped():
+                        await controller.smooth_stop()
 
     except websockets.exceptions.ConnectionClosed:
         pass
     finally:
+        if autonomous_task and not autonomous_task.done():
+            autonomous_task.cancel()
         cancel_all()
         controller.center_steering()
         print(f"Client disconnected: {websocket.remote_address}")

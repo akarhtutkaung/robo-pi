@@ -4,6 +4,9 @@ control server (8765). The client connects here to negotiate a WebRTC
 peer connection; the actual camera video travels peer-to-peer over WebRTC
 after signaling completes.
 
+The Picamera2 instance is created once at startup and reused across
+reconnections — creating it per-connection causes "Device or resource busy".
+
 Signaling flow (vanilla ICE — Pi waits for full ICE gathering):
     1. Client  → Pi   : {"type": "offer",  "sdp": "<SDP string>"}
     2. Pi creates RTCPeerConnection, adds CameraVideoTrack
@@ -20,12 +23,12 @@ import websockets
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc.sdp import candidate_from_sdp
 from src.core.config import WEBRTC_CFG
-from src.perception.camera import CameraVideoTrack
+from src.perception.camera import CameraVideoTrack, make_camera
 from src.perception.vision.stream import configure_h264
 
-async def on_signaling(websocket):
+async def on_signaling(websocket, camera):
     pc = RTCPeerConnection()
-    track = CameraVideoTrack()
+    track = CameraVideoTrack(camera)
     pc.addTrack(track)
     configure_h264(pc)   # force H.264 — must be called before setRemoteDescription
 
@@ -59,13 +62,21 @@ async def on_signaling(websocket):
     except websockets.exceptions.ConnectionClosed:
         pass
     finally:
-        track.stop()
-        await pc.close()
+        await pc.close()  # camera is owned by start_webrtc_server, not closed here
 
 async def start_webrtc_server():
     host = WEBRTC_CFG["host"]
     port = WEBRTC_CFG["port"]
 
-    async with websockets.serve(on_signaling, host, port):
+    camera = make_camera()
+
+    async with websockets.serve(
+        lambda ws: on_signaling(ws, camera),
+        host,
+        port
+    ):
         print(f"WebRTC signaling server listening on ws://{host}:{port}")
-        await asyncio.Future()  # keeps the server running forever
+        try:
+            await asyncio.Future()  # keeps the server running forever
+        finally:
+            camera.stop()
