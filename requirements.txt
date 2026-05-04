@@ -13,8 +13,5 @@ websockets
 aiohttp==3.10.* # WebRTC (camera streaming)
 aiortc>=1.14.0
 
-# Pi camera capture (Raspberry Pi only)
-picamera2
-
 # Config file parsing
 pyyaml
