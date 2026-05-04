@@ -10,7 +10,8 @@ AUTONOMOUS_SPEED = 40  # unitless throttle scale
 
 
 async def run_autonomous(controller):
-    """Drive forward continuously until cancelled."""
+    """For now. Drive forward continuously until cancelled."""
+    controller.center_camera()
     controller.setSpeed(AUTONOMOUS_SPEED)
     try:
         while True:
