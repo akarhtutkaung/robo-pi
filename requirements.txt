@@ -5,6 +5,7 @@
 adafruit-circuitpython-pca9685
 adafruit-circuitpython-motor
 rpi-lgpio
+pigpio
 
 # WebSocket server
 websockets

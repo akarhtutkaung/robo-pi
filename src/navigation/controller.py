@@ -70,7 +70,7 @@ class RobotController:
         self._servo.center("servo2")
     
     def stop(self):
-        self.smooth_stop()
+        self._motor.stop()
         self.center_camera()
     
     def force_stop_motors(self):

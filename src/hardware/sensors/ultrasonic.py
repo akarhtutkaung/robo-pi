@@ -3,11 +3,12 @@
 # .distance is non-blocking and always returns the latest measurement.
 
 from gpiozero import DistanceSensor
+from gpiozero.pins.pigpio import PiGPIOFactory
 from src.core.config import ULTRASONIC_CFG
 
 class UltrasonicSensor:
     def __init__(self, trigger=ULTRASONIC_CFG["trigger_pin"], echo=ULTRASONIC_CFG["echo_pin"]):
-          self._sensor = DistanceSensor(echo=echo, trigger=trigger, max_distance=ULTRASONIC_CFG["max_distance"])
+        self._sensor = DistanceSensor(echo=echo, trigger=trigger, max_distance=ULTRASONIC_CFG["max_distance"], pin_factory=PiGPIOFactory())
 
     def distance_cm(self) -> float:
         return self._sensor.distance * 100  # gpiozero returns metres
