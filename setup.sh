@@ -24,11 +24,7 @@ sudo apt install -y \
     python3-libcamera \
     python3-picamera2 \
     libcamera-apps \
-    pigpio
-
-echo "Enabling pigpiod daemon..."
-sudo systemctl enable pigpiod
-sudo systemctl start pigpiod
+    python3-lgpio
 
 echo "Creating virtual environment (with system packages)..."
 python3 -m venv .venv --system-site-packages
