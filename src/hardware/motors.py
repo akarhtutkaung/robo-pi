@@ -28,7 +28,7 @@ class RearMotor:
 
     def set_speed(self, speed: int):
         max_speed = self._motor_cfg["rear"]["max_speed"]
-        self._target_speed = float(max(-max_speed, min(max_speed, speed)))
+        self._target_speed = float(max(-max_speed, min(max_speed, -speed)))
         if self._ramp_task is None or self._ramp_task.done():
             self._ramp_task = asyncio.create_task(self._ramp_loop())
 
