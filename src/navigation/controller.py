@@ -38,6 +38,9 @@ class RobotController:
         angle = max(cfg["max_angle"], min(cfg["min_angle"], angle))
         self._servo.set_angle("servo0", angle)
 
+    def steer_center(self):
+        self._servo.center("servo0")
+
     def move_camera(self, axis: str, angle: int):
         servo_name = "servo1" if axis == "x" else "servo2"
         abs_angle = abs(angle)  # convert to positive for hardware call
