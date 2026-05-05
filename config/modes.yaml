@@ -1,0 +1,8 @@
+# modes.yaml
+# Mode-specific settings for each operating mode.
+# Hardware config (pins, addresses, PWM) lives in hardware.yaml.
+
+autonomous:
+  speed: 6          # forward cruising speed
+  reverse_speed: 4  # reverse speed during avoidance maneuvers
+  approach_speed: 3 # speed when slowing down in the braking zone

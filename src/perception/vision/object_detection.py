@@ -4,8 +4,8 @@
 from src.core.config import ULTRASONIC_CFG
 from src.hardware.sensors.ultrasonic import UltrasonicSensor
 
-STOP_CM        = ULTRASONIC_CFG["stop_cm"]
-TURN_CM        = ULTRASONIC_CFG["turn_cm"]
+STOP_CM = ULTRASONIC_CFG["stop_cm"]
+TURN_CM = ULTRASONIC_CFG["turn_cm"]
 SUDDEN_STOP_CM = ULTRASONIC_CFG["sudden_stop_cm"]
 
 class ObstacleDetector:

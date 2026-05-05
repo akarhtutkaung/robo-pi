@@ -12,8 +12,9 @@ motors:
     channel_in1: 15     # positive pole
     channel_in2: 14     # negative pole
     max_speed: 14
-    accelerate_rate: 10   # Acceleration rate in units/second (60 = full speed in ~0.5s)
-    decelerate_rate: 200  # Deceleration rate in units/second (higher for quicker stops)
+    accelerate_rate: 10          # units/second for forward acceleration
+    reverse_accelerate_rate: 3   # units/second when starting from stop into reverse (slow creep)
+    decelerate_rate: 200         # units/second for braking
     cm_per_speed_unit: 1.2  # cm/s per throttle unit — calibrate: run forward(6) for 1s, measure d_cm, set d_cm/6
 
 servos:
