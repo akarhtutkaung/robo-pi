@@ -68,5 +68,5 @@ async def run_autonomous(controller, obstacle):
         while True:
             await obstacle_algorithm(controller, obstacle)
     except asyncio.CancelledError:
-        pass
+        await controller.smooth_stop()
     
