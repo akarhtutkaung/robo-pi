@@ -73,12 +73,12 @@ class RearMotor:
         self.stop()
 
     def stop(self):
+        self._motor.throttle = 0
+        self._current_speed = 0.0
+        self._target_speed = 0.0
         if self._ramp_task and not self._ramp_task.done():
             self._ramp_task.cancel()
         self._ramp_task = None
-        self._current_speed = 0.0
-        self._target_speed = 0.0
-        self._motor.throttle = 0
 
     def cleanup(self):
         self._pca.deinit()

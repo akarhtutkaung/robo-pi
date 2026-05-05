@@ -24,3 +24,6 @@ class ObstacleDetector:
 
     def cleanup(self):
         self._sensor.cleanup()
+
+    def get_distance(self) -> float:
+        return self.distance_cm()
