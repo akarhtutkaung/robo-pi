@@ -19,10 +19,12 @@ async def run_autonomous(controller, obstacle):
         while True:
             if obstacle.is_blocked():
                 print("Obstacle detected ahead! Initiating avoidance maneuvers.")
-                await controller.smooth_stop()
+                # await controller.smooth_stop()
+                controller.force_stop_motors()  # immediately cut power to motors to prevent collision
                 controller.backward(AUTONOMOUS_SPEED)  # back up a bit
-                await asyncio.sleep(1)                 # back up for 1 second
-                await controller.smooth_stop()
+                await asyncio.sleep(0.5)                 # back up for 1 second
+                # await controller.smooth_stop()
+                controller.force_stop_motors()  # immediately cut power to motors to prevent collision
 
                 # Check left and right before turning to avoid getting stuck in a corner
                 # by moving camera and checking for obstacles in each direction. This is a simple heuristic
@@ -32,7 +34,7 @@ async def run_autonomous(controller, obstacle):
                 right_blocked = obstacle.is_blocked()
                 
                 controller.move_camera_to("x", 135)        # look left
-                await asyncio.sleep(0.5)                 # give camera time to move
+                await asyncio.sleep(1)                 # give camera time to move
                 left_blocked = obstacle.is_blocked()
                 controller.center_camera()                # reset camera position
 
@@ -45,7 +47,7 @@ async def run_autonomous(controller, obstacle):
                 else:
                     print("Obstacle ahead, but both sides are blocked. Moving back further.")
                     controller.backward(AUTONOMOUS_SPEED)  # back up more
-                    await asyncio.sleep(1)                 # back up for another second
+                    await asyncio.sleep(0.5)                 # back up for another second
             else:
                 controller.forward(AUTONOMOUS_SPEED)  # keep moving forward
             await asyncio.sleep(0.1)  # small delay to prevent overwhelming the loop
