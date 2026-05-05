@@ -7,17 +7,36 @@ Extend this with obstacle avoidance, SLAM, etc. as sensors are implemented.
 import asyncio
 from src.navigation.controller import RobotController
 from src.perception.vision.object_detection import ObstacleDetector
+from src.core.config import MOTOR_CFG
 
-AUTONOMOUS_SPEED = 6
-APPROACH_SPEED = 3   # half speed when obstacle is close but not yet blocking
+AUTONOMOUS_SPEED     = 6
+APPROACH_SPEED       = 3    # half speed when obstacle is in the braking zone
+_CM_PER_SPEED_UNIT   = MOTOR_CFG["rear"]["cm_per_speed_unit"]
+_STOP_TARGET_MARGIN  = 5.0  # cm — stop within this distance of the obstacle
 
 async def setup(controller):
     controller.center_camera()
 
 async def obstacle_algorithm(controller, obstacle):
     if obstacle.is_blocked():
-        print("Obstacle detected ahead! Initiating avoidance maneuvers.")
-        await controller.smooth_stop()
+        distance = obstacle.distance_cm()
+
+        if obstacle.is_sudden_stop():
+            print(f"Sudden obstacle at {distance:.1f} cm — hard stop.")
+            controller.force_stop()
+        else:
+            v        = controller.current_speed
+            d_target = distance - _STOP_TARGET_MARGIN
+            if d_target > 0 and abs(v) > 0.1:
+                # v² = 2*a*d → rate = v²*K / (2*d_target), K = cm_per_speed_unit
+                required_rate = (v ** 2) * _CM_PER_SPEED_UNIT / (2.0 * d_target)
+                required_rate = max(required_rate, MOTOR_CFG["rear"]["decelerate_rate"])
+            else:
+                required_rate = None
+            print(f"Obstacle at {distance:.1f} cm — smooth stop (rate={required_rate}).")
+            await controller.smooth_stop(rate=required_rate)
+
+        print("Initiating avoidance maneuvers.")
 
         controller.move_camera_to("x", 45)
         await asyncio.sleep(1)

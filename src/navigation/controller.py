@@ -24,6 +24,10 @@ class RobotController:
         self._servo = ServoController(self._pca, SERVO_CFG)
         self._servo.center_all()  # safe starting position
     
+    @property
+    def current_speed(self) -> float:
+        return self._motor.current_speed
+
     def setSpeed(self, speed: int):
         self._motor.set_speed(speed)
 
@@ -60,8 +64,8 @@ class RobotController:
     def center_steering(self):
         self._servo.center("servo0")
 
-    async def smooth_stop(self):
-        await self._motor.smooth_stop()
+    async def smooth_stop(self, rate: float | None = None):
+        await self._motor.smooth_stop(rate)
 
     def force_stop(self):
         self._motor.stop()

@@ -4,8 +4,9 @@
 from src.core.config import ULTRASONIC_CFG
 from src.hardware.sensors.ultrasonic import UltrasonicSensor
 
-STOP_CM = ULTRASONIC_CFG["stop_cm"]
-TURN_CM = ULTRASONIC_CFG["turn_cm"]
+STOP_CM        = ULTRASONIC_CFG["stop_cm"]
+TURN_CM        = ULTRASONIC_CFG["turn_cm"]
+SUDDEN_STOP_CM = ULTRASONIC_CFG["sudden_stop_cm"]
 
 class ObstacleDetector:
     def __init__(self):
@@ -15,8 +16,10 @@ class ObstacleDetector:
         return self._sensor.distance_cm()
 
     def is_blocked(self) -> bool:
-        # """True when an obstacle is within STOP_CM."""
         return self.distance_cm() < STOP_CM
+
+    def is_sudden_stop(self) -> bool:
+        return self.distance_cm() < SUDDEN_STOP_CM
 
     def should_turn(self) -> bool:
         # """True when an obstacle is close enough to start drifting."""

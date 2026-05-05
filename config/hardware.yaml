@@ -14,6 +14,7 @@ motors:
     max_speed: 14
     accelerate_rate: 10   # Acceleration rate in units/second (60 = full speed in ~0.5s)
     decelerate_rate: 200  # Deceleration rate in units/second (higher for quicker stops)
+    cm_per_speed_unit: 1.2  # cm/s per throttle unit — calibrate: run forward(6) for 1s, measure d_cm, set d_cm/6
 
 servos:
   servo0:              # Front wheel steering (left / right)
@@ -48,5 +49,6 @@ ultrasonic:
   trigger_pin: 23
   echo_pin: 24
   max_distance: 2   # Maximum distance to measure in m (adjust based on sensor specs)
-  stop_cm: 55       # Distance at which to stop
+  stop_cm: 30       # Distance at which to stop
   turn_cm: 90       # Distance at which to start slowing down
+  sudden_stop_cm: 20  # Distance at which to hard-stop immediately (must be < stop_cm)

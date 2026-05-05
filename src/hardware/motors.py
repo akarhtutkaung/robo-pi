@@ -26,6 +26,10 @@ class RearMotor:
         self._target_speed = 0.0
         self._ramp_task: asyncio.Task | None = None
 
+    @property
+    def current_speed(self) -> float:
+        return self._current_speed
+
     def set_speed(self, speed: int):
         max_speed = self._motor_cfg["rear"]["max_speed"]
         self._target_speed = float(max(-max_speed, min(max_speed, speed)))
@@ -50,7 +54,7 @@ class RearMotor:
         self._current_speed = self._target_speed
         self._motor.throttle = self._current_speed / max_speed
 
-    async def smooth_stop(self):
+    async def smooth_stop(self, rate: float | None = None):
         self._target_speed = 0.0
         if self._ramp_task and not self._ramp_task.done():
             self._ramp_task.cancel()
@@ -61,8 +65,8 @@ class RearMotor:
             self._ramp_task = None
 
         max_speed = self._motor_cfg["rear"]["max_speed"]
-        rate = self._motor_cfg["rear"]["decelerate_rate"]
-        step = rate * _RAMP_DT
+        effective_rate = rate if rate is not None else self._motor_cfg["rear"]["decelerate_rate"]
+        step = effective_rate * _RAMP_DT
         while abs(self._current_speed) > 0.1:
             if self._current_speed > 0:
                 self._current_speed = max(0.0, self._current_speed - step)
