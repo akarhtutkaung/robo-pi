@@ -8,7 +8,8 @@ import asyncio
 from src.navigation.controller import RobotController
 from src.perception.vision.object_detection import ObstacleDetector
 
-AUTONOMOUS_SPEED = 8  # unitless throttle scale
+AUTONOMOUS_SPEED = 8
+APPROACH_SPEED = 4   # half speed when obstacle is close but not yet blocking
 
 async def setup(controller):
     controller.center_camera()
@@ -54,6 +55,8 @@ async def obstacle_algorithm(controller, obstacle):
             await controller.smooth_stop()
 
         controller.steer_center()
+    elif obstacle.should_turn():
+        controller.forward(APPROACH_SPEED)
     else:
         controller.forward(AUTONOMOUS_SPEED)
     await asyncio.sleep(0.1)
