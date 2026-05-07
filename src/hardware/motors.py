@@ -26,6 +26,10 @@ class RearMotor:
         self._target_speed = 0.0
         self._ramp_task: asyncio.Task | None = None
 
+    @property
+    def current_speed(self) -> float:
+        return self._current_speed
+
     def set_speed(self, speed: int):
         max_speed = self._motor_cfg["rear"]["max_speed"]
         self._target_speed = float(max(-max_speed, min(max_speed, speed)))
@@ -34,13 +38,20 @@ class RearMotor:
 
     async def _ramp_loop(self):
         max_speed = self._motor_cfg["rear"]["max_speed"]
-        accel = self._motor_cfg["rear"]["accelerate_rate"]
-        decel = self._motor_cfg["rear"]["decelerate_rate"]
+        accel         = self._motor_cfg["rear"]["accelerate_rate"]
+        reverse_accel = self._motor_cfg["rear"]["reverse_accelerate_rate"]
+        decel         = self._motor_cfg["rear"]["decelerate_rate"]
         while abs(self._current_speed - self._target_speed) >= 0.05:
-            # slowing down (toward zero) uses decel_rate; speeding up uses accel_rate
-            toward_zero = (self._current_speed > 0 and self._target_speed < self._current_speed) or \
-                          (self._current_speed < 0 and self._target_speed > self._current_speed)
-            step = (decel if toward_zero else accel) * _RAMP_DT
+            toward_zero    = (self._current_speed > 0 and self._target_speed < self._current_speed) or \
+                             (self._current_speed < 0 and self._target_speed > self._current_speed)
+            into_reverse   = abs(self._current_speed) < 0.1 and self._target_speed < 0
+            if toward_zero:
+                rate = decel
+            elif into_reverse:
+                rate = reverse_accel  # slow creep into reverse, like a real car
+            else:
+                rate = accel
+            step = rate * _RAMP_DT
             if self._target_speed > self._current_speed:
                 self._current_speed = min(self._target_speed, self._current_speed + step)
             else:
@@ -50,7 +61,7 @@ class RearMotor:
         self._current_speed = self._target_speed
         self._motor.throttle = self._current_speed / max_speed
 
-    async def smooth_stop(self):
+    async def smooth_stop(self, rate: float | None = None):
         self._target_speed = 0.0
         if self._ramp_task and not self._ramp_task.done():
             self._ramp_task.cancel()
@@ -61,8 +72,8 @@ class RearMotor:
             self._ramp_task = None
 
         max_speed = self._motor_cfg["rear"]["max_speed"]
-        rate = self._motor_cfg["rear"]["decelerate_rate"]
-        step = rate * _RAMP_DT
+        effective_rate = rate if rate is not None else self._motor_cfg["rear"]["decelerate_rate"]
+        step = effective_rate * _RAMP_DT
         while abs(self._current_speed) > 0.1:
             if self._current_speed > 0:
                 self._current_speed = max(0.0, self._current_speed - step)
@@ -73,12 +84,12 @@ class RearMotor:
         self.stop()
 
     def stop(self):
+        self._motor.throttle = 0
+        self._current_speed = 0.0
+        self._target_speed = 0.0
         if self._ramp_task and not self._ramp_task.done():
             self._ramp_task.cancel()
         self._ramp_task = None
-        self._current_speed = 0.0
-        self._target_speed = 0.0
-        self._motor.throttle = 0
 
     def cleanup(self):
         self._pca.deinit()

@@ -12,15 +12,17 @@ motors:
     channel_in1: 15     # positive pole
     channel_in2: 14     # negative pole
     max_speed: 14
-    accelerate_rate: 10   # Acceleration rate in units/second (60 = full speed in ~0.5s)
-    decelerate_rate: 100  # Deceleration rate in units/second (higher for quicker stops)
+    accelerate_rate: 10          # units/second for forward acceleration
+    reverse_accelerate_rate: 3   # units/second when starting from stop into reverse (slow creep)
+    decelerate_rate: 200         # units/second for braking
+    cm_per_speed_unit: 1.2  # cm/s per throttle unit — calibrate: run forward(6) for 1s, measure d_cm, set d_cm/6
 
 servos:
   servo0:              # Front wheel steering (left / right)
     channel: 0         # TODO: verify correct PCA9685 channel from examples/03_servo.py
     center_angle: 94.68   # Straight ahead (calibrated)
-    max_angle: 66.36      # Maximum right turn angle
-    min_angle: 123     # Maximum left turn angle
+    max_angle: 50      # Maximum right turn angle
+    min_angle: 140     # Maximum left turn angle
     step_size: 5       # Angle change step size for smoother steering
 
   servo1:              # Head rotation left/right
@@ -43,3 +45,11 @@ websocket:
 webrtc:
   host: "0.0.0.0"
   port: 8766           # Signaling WS — WebRTC video negotiation only
+
+ultrasonic:
+  trigger_pin: 23
+  echo_pin: 24
+  max_distance: 2   # Maximum distance to measure in m (adjust based on sensor specs)
+  stop_cm: 30       # Distance at which to stop
+  turn_cm: 90       # Distance at which to start slowing down
+  sudden_stop_cm: 20  # Distance at which to hard-stop immediately (must be < stop_cm)

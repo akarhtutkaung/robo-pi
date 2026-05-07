@@ -24,6 +24,10 @@ class RobotController:
         self._servo = ServoController(self._pca, SERVO_CFG)
         self._servo.center_all()  # safe starting position
     
+    @property
+    def current_speed(self) -> float:
+        return self._motor.current_speed
+
     def setSpeed(self, speed: int):
         self._motor.set_speed(speed)
 
@@ -38,6 +42,9 @@ class RobotController:
         angle = max(cfg["max_angle"], min(cfg["min_angle"], angle))
         self._servo.set_angle("servo0", angle)
 
+    def steer_center(self):
+        self._servo.center("servo0")
+
     def move_camera(self, axis: str, angle: int):
         servo_name = "servo1" if axis == "x" else "servo2"
         abs_angle = abs(angle)  # convert to positive for hardware call
@@ -45,7 +52,11 @@ class RobotController:
             self._servo.increase_angle(servo_name, abs_angle)
         else:
             self._servo.decrease_angle(servo_name, abs_angle)
-        
+    
+    def move_camera_to(self, axis: str, angle: int):
+        servo_name = "servo1" if axis == "x" else "servo2"
+        self._servo.set_angle(servo_name, angle)
+
     def center_camera(self):
         self._servo.center("servo1")
         self._servo.center("servo2")
@@ -53,8 +64,8 @@ class RobotController:
     def center_steering(self):
         self._servo.center("servo0")
 
-    async def smooth_stop(self):
-        await self._motor.smooth_stop()
+    async def smooth_stop(self, rate: float | None = None):
+        await self._motor.smooth_stop(rate)
 
     def force_stop(self):
         self._motor.stop()
@@ -63,8 +74,11 @@ class RobotController:
         self._servo.center("servo2")
     
     def stop(self):
-        self.smooth_stop()
+        self._motor.stop()
         self.center_camera()
+    
+    def force_stop_motors(self):
+        self._motor.stop()
 
     def is_stopped(self):
         return self._motor.is_stopped() and self._servo.is_stopped("servo0")
