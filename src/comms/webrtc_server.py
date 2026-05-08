@@ -23,7 +23,7 @@ import websockets
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc.sdp import candidate_from_sdp
 from src.core.config import WEBRTC_CFG
-from src.perception.camera import CameraVideoTrack, make_camera
+from src.perception.camera import CameraVideoTrack
 from src.perception.vision.stream import configure_h264
 
 async def on_signaling(websocket, camera):
@@ -64,11 +64,9 @@ async def on_signaling(websocket, camera):
     finally:
         await pc.close()  # camera is owned by start_webrtc_server, not closed here
 
-async def start_webrtc_server():
+async def start_webrtc_server(camera: "Picamera2"):
     host = WEBRTC_CFG["host"]
     port = WEBRTC_CFG["port"]
-
-    camera = make_camera()
 
     async with websockets.serve(
         lambda ws: on_signaling(ws, camera),
@@ -82,5 +80,3 @@ async def start_webrtc_server():
             server.close()
             await server.wait_closed()
             raise
-        finally:
-            camera.stop()

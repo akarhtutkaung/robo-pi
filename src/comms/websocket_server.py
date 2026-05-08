@@ -20,7 +20,7 @@ from src.core.modes.autonomous import run_autonomous
 
 _RECV_TIMEOUT = 0.3  # poll interval while waiting for mode-switch in autonomous mode
 
-async def on_connect(websocket, controller):
+async def on_connect(websocket, controller, camera):
     print(f"Client connected: {websocket.remote_address}")
 
     current_mode = "manual"
@@ -39,7 +39,7 @@ async def on_connect(websocket, controller):
                     if not controller.is_stopped():
                         asyncio.create_task(controller.smooth_stop())
                     obstacle = ObstacleDetector()
-                    autonomous_task = asyncio.create_task(run_autonomous(controller, obstacle))
+                    autonomous_task = asyncio.create_task(run_autonomous(controller, obstacle, camera))
                     print("[mode] Switched to autonomous")
 
             else:  # autonomous — only watch for a switch back to manual
@@ -74,12 +74,12 @@ async def on_connect(websocket, controller):
         print("[!] Robot stopped.")
 
 
-async def start_server(controller):
+async def start_server(controller, camera):
     host = WS_CFG["host"]
     port = WS_CFG["port"]
 
     async with websockets.serve(
-        lambda ws: on_connect(ws, controller),
+        lambda ws: on_connect(ws, controller, camera),
         host,
         port
     ) as server:
