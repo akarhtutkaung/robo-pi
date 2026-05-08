@@ -14,4 +14,7 @@ class UltrasonicSensor:
         return self._sensor.distance * 100  # gpiozero returns metres
     
     def cleanup(self):
-        self._sensor.close()
+        try:
+            self._sensor.close()
+        except Exception:
+            pass
