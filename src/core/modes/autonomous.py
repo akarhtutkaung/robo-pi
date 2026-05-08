@@ -1,9 +1,24 @@
 """
 Autonomous drive loop — runs while the robot is in autonomous mode.
 Triggered by a {"type": "mode", "action": "autonomous"} WebSocket message.
+
+Sends drive_state messages to the client each tick so the UI can display
+current phase, steering direction, error, and confidence without any
+overlay on the video stream.
+
+drive_state message format:
+    {
+        "type":       "drive_state",
+        "phase":      "clear" | "approaching" | "blocked" | "avoiding",
+        "direction":  "CENTER" | "SLIGHT LEFT" | "LEFT" | "HARD LEFT"
+                      | "SLIGHT RIGHT" | "RIGHT" | "HARD RIGHT",
+        "error":      float [-1, 1],   # negative = left, positive = right
+        "confidence": float [0, 1]
+    }
 """
 
 import asyncio
+import json
 from src.perception.vision.free_space import detect, MIN_CONFIDENCE
 from src.perception.camera import capture_bgr
 from src.core.config import MOTOR_CFG, AUTONOMOUS_CFG, SERVO_CFG
@@ -22,12 +37,43 @@ _STEER_HALF_RANGE = min(
     _STEER_LEFT   - _CENTER_ANGLE,
 )
 
+_DIRECTION_THRESHOLDS = [
+    (0.08, "CENTER"),
+    (0.25, "SLIGHT"),
+    (0.55, ""),
+    (2.0,  "HARD"),
+]
+
+
+def _direction_label(error: float) -> str:
+    a = abs(error)
+    for threshold, prefix in _DIRECTION_THRESHOLDS:
+        if a < threshold:
+            if prefix == "CENTER":
+                return "CENTER"
+            side = "LEFT" if error < 0 else "RIGHT"
+            return f"{prefix} {side}".strip() if prefix else side
+    return "LEFT" if error < 0 else "RIGHT"
+
+
+async def _send(websocket, phase: str, error: float = 0.0, confidence: float = 0.0):
+    try:
+        await websocket.send(json.dumps({
+            "type":       "drive_state",
+            "phase":      phase,
+            "direction":  _direction_label(error),
+            "error":      round(error, 3),
+            "confidence": round(confidence, 2),
+        }))
+    except Exception:
+        pass  # client may have disconnected
+
 
 async def setup(controller):
     controller.center_camera()
 
 
-async def navigate_step(controller, obstacle, camera):
+async def navigate_step(controller, obstacle, camera, websocket):
     if obstacle.is_blocked():
         distance = obstacle.distance_cm()
 
@@ -45,7 +91,6 @@ async def navigate_step(controller, obstacle, camera):
             print(f"Obstacle at {distance:.1f} cm — smooth stop (rate={required_rate}).")
             await controller.smooth_stop(rate=required_rate)
 
-        # Camera determines which side has more free space
         error, conf = detect(capture_bgr(camera))
         if conf >= MIN_CONFIDENCE and error > 0:
             print(f"Camera: free space right (err={error:+.2f}) — turning right")
@@ -55,7 +100,10 @@ async def navigate_step(controller, obstacle, camera):
             steer_angle, opposite_angle = _STEER_LEFT, _STEER_RIGHT
         else:
             print(f"Camera: low confidence ({conf:.2f}) — defaulting right")
+            error = 0.5  # report as slight-right since that's the default
             steer_angle, opposite_angle = _STEER_RIGHT, _STEER_LEFT
+
+        await _send(websocket, "avoiding", error, conf)
 
         # K-turn: steer → back → opposite steer → forward → centre
         controller.steer(steer_angle)
@@ -72,25 +120,27 @@ async def navigate_step(controller, obstacle, camera):
         await controller.smooth_stop()
 
     elif obstacle.should_turn():
+        await _send(websocket, "approaching", 0.0, 0.0)
         controller.forward(APPROACH_SPEED)
 
     else:
-        # Proportional steering toward free space
         error, conf = detect(capture_bgr(camera))
         if conf >= MIN_CONFIDENCE:
             steer_angle = round(_CENTER_ANGLE - error * _STEER_HALF_RANGE)
             controller.steer(int(steer_angle))
         else:
+            error = 0.0
             controller.steer_center()
         controller.forward(AUTONOMOUS_SPEED)
+        await _send(websocket, "clear", error, conf)
 
     await asyncio.sleep(0.1)
 
 
-async def run_autonomous(controller, obstacle, camera):
+async def run_autonomous(controller, obstacle, camera, websocket):
     await setup(controller)
     try:
         while True:
-            await navigate_step(controller, obstacle, camera)
+            await navigate_step(controller, obstacle, camera, websocket)
     except asyncio.CancelledError:
         await controller.smooth_stop()

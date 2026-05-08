@@ -39,7 +39,7 @@ async def on_connect(websocket, controller, camera):
                     if not controller.is_stopped():
                         asyncio.create_task(controller.smooth_stop())
                     obstacle = ObstacleDetector()
-                    autonomous_task = asyncio.create_task(run_autonomous(controller, obstacle, camera))
+                    autonomous_task = asyncio.create_task(run_autonomous(controller, obstacle, camera, websocket))
                     print("[mode] Switched to autonomous")
 
             else:  # autonomous — only watch for a switch back to manual
