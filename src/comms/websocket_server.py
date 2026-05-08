@@ -82,6 +82,11 @@ async def start_server(controller):
         lambda ws: on_connect(ws, controller),
         host,
         port
-    ):
+    ) as server:
         print(f"WebSocket server listening on ws://{host}:{port}")
-        await asyncio.Future()  # keeps the server running forever
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            server.close()
+            await server.wait_closed()
+            raise

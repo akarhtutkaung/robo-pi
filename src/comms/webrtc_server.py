@@ -74,9 +74,13 @@ async def start_webrtc_server():
         lambda ws: on_signaling(ws, camera),
         host,
         port
-    ):
+    ) as server:
         print(f"WebRTC signaling server listening on ws://{host}:{port}")
         try:
-            await asyncio.Future()  # keeps the server running forever
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            server.close()
+            await server.wait_closed()
+            raise
         finally:
             camera.stop()
