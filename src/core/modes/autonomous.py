@@ -92,32 +92,40 @@ async def navigate_step(controller, obstacle, camera, websocket):
             await controller.smooth_stop(rate=required_rate)
 
         error, conf = detect(capture_bgr(camera))
-        if conf >= MIN_CONFIDENCE and error > 0:
-            print(f"Camera: free space right (err={error:+.2f}) — turning right")
-            steer_angle, opposite_angle = _STEER_RIGHT, _STEER_LEFT
-        elif conf >= MIN_CONFIDENCE and error < 0:
-            print(f"Camera: free space left (err={error:+.2f}) — turning left")
-            steer_angle, opposite_angle = _STEER_LEFT, _STEER_RIGHT
+
+        if conf >= MIN_CONFIDENCE:
+            # Free space visible on one side — K-turn toward it
+            if error > 0:
+                print(f"Camera: free space right (err={error:+.2f}) — turning right")
+                steer_angle, opposite_angle = _STEER_RIGHT, _STEER_LEFT
+            else:
+                print(f"Camera: free space left (err={error:+.2f}) — turning left")
+                steer_angle, opposite_angle = _STEER_LEFT, _STEER_RIGHT
+
+            await _send(websocket, "avoiding", error, conf)
+
+            # K-turn: steer → back → opposite steer → forward → centre
+            controller.steer(steer_angle)
+            await asyncio.sleep(0.3)
+            controller.backward(REVERSE_SPEED)
+            await asyncio.sleep(1.5)
+            await controller.smooth_stop()
+            controller.steer(opposite_angle)
+            await asyncio.sleep(0.3)
+            controller.forward(AUTONOMOUS_SPEED)
+            await asyncio.sleep(1.0)
+            controller.steer_center()
+            await asyncio.sleep(0.5)
+            await controller.smooth_stop()
+
         else:
-            print(f"Camera: low confidence ({conf:.2f}) — defaulting right")
-            error = 0.5  # report as slight-right since that's the default
-            steer_angle, opposite_angle = _STEER_RIGHT, _STEER_LEFT
-
-        await _send(websocket, "avoiding", error, conf)
-
-        # K-turn: steer → back → opposite steer → forward → centre
-        controller.steer(steer_angle)
-        await asyncio.sleep(0.3)
-        controller.backward(REVERSE_SPEED)
-        await asyncio.sleep(1.5)
-        await controller.smooth_stop()
-        controller.steer(opposite_angle)
-        await asyncio.sleep(0.3)
-        controller.forward(AUTONOMOUS_SPEED)
-        await asyncio.sleep(1.0)
-        controller.steer_center()
-        await asyncio.sleep(0.5)
-        await controller.smooth_stop()
+            # All directions obstructed — reverse straight and reassess
+            print(f"Camera: all directions blocked (conf={conf:.2f}) — reversing straight.")
+            await _send(websocket, "blocked", 0.0, conf)
+            controller.steer_center()
+            controller.backward(REVERSE_SPEED)
+            await asyncio.sleep(2.0)
+            await controller.smooth_stop()
 
     elif obstacle.should_turn():
         await _send(websocket, "approaching", 0.0, 0.0)
