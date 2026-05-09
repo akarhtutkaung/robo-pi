@@ -46,6 +46,20 @@ webrtc:
   host: "0.0.0.0"
   port: 8766           # Signaling WS — WebRTC video negotiation only
 
+cameras:
+  front:
+    index: 0              # Pi Camera V3 Wide Angle — CSI port 0
+    main_width: 1920
+    main_height: 1080
+    lores_width: 640
+    lores_height: 480
+  back:
+    index: 1              # Back camera — CSI port 1
+    main_width: 640
+    main_height: 480
+    lores_width: 320
+    lores_height: 240
+
 ultrasonic:
   trigger_pin: 23
   echo_pin: 24

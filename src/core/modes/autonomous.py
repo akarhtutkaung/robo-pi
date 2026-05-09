@@ -107,9 +107,11 @@ async def navigate_step(controller, obstacle, camera, websocket):
             # K-turn: steer → back → opposite steer → forward → centre
             controller.steer(steer_angle)
             await asyncio.sleep(0.3)
+            camera.use_back()
             controller.backward(REVERSE_SPEED)
             await asyncio.sleep(1.5)
             await controller.smooth_stop()
+            camera.use_front()
             controller.steer(opposite_angle)
             await asyncio.sleep(0.3)
             controller.forward(AUTONOMOUS_SPEED)
@@ -123,9 +125,11 @@ async def navigate_step(controller, obstacle, camera, websocket):
             print(f"Camera: all directions blocked (conf={conf:.2f}) — reversing straight.")
             await _send(websocket, "blocked", 0.0, conf)
             controller.steer_center()
+            camera.use_back()
             controller.backward(REVERSE_SPEED)
             await asyncio.sleep(2.0)
             await controller.smooth_stop()
+            camera.use_front()
 
     elif obstacle.should_turn():
         await _send(websocket, "approaching", 0.0, 0.0)
