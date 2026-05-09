@@ -153,7 +153,10 @@ if __name__ == "__main__":
         frame = capture_bgr(cam)
         return frame, cam
 
-    if len(sys.argv) > 1 and sys.argv[1] not in ("--live", "--headless"):
+    _FLAGS = {"--live", "--headless", "--stream"}
+    _args  = set(sys.argv[1:])
+
+    if _args and not (_args & _FLAGS):
         # Static image mode: python3 -m src.perception.vision.free_space frame.jpg
         frame = _from_file(sys.argv[1])
         error, confidence = detect(frame)
@@ -164,8 +167,6 @@ if __name__ == "__main__":
         cv2.destroyAllWindows()
 
     else:
-        headless = "--headless" in sys.argv or "--live" not in sys.argv
-
         from src.perception.camera import make_camera, capture_bgr  # type: ignore
         from src.core.config import CAMERA_CFG  # type: ignore
         fc  = CAMERA_CFG["front"]
@@ -173,7 +174,63 @@ if __name__ == "__main__":
                           fc["lores_width"], fc["lores_height"], fc["framerate"],
                           fc.get("rotate_180", False))
 
-        if headless:
+        if "--stream" in _args:
+            # MJPEG stream mode — open http://<pi-ip>:8080 in any browser.
+            # python3 -m src.perception.vision.free_space --stream
+            import time
+            import threading
+            from http.server import BaseHTTPRequestHandler, HTTPServer
+
+            _STREAM_PORT = 8080
+            _shared: dict = {"jpg": None}
+            _lock = threading.Lock()
+
+            class _Handler(BaseHTTPRequestHandler):
+                def do_GET(self):
+                    self.send_response(200)
+                    self.send_header("Content-Type",
+                                     "multipart/x-mixed-replace; boundary=frame")
+                    self.end_headers()
+                    try:
+                        while True:
+                            with _lock:
+                                jpg = _shared["jpg"]
+                            if jpg is None:
+                                time.sleep(0.03)
+                                continue
+                            self.wfile.write(
+                                b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
+                                + jpg + b"\r\n"
+                            )
+                            time.sleep(0.03)
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
+
+                def log_message(self, *_):
+                    pass  # suppress per-request logs
+
+            server = HTTPServer(("0.0.0.0", _STREAM_PORT), _Handler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            print(f"Streaming debug overlay — open http://<pi-ip>:{_STREAM_PORT} in your browser.")
+            print("Ctrl+C to stop.")
+
+            try:
+                while True:
+                    frame       = capture_bgr(cam)
+                    error, conf = detect(frame)
+                    vis         = draw_debug(frame, error, conf)
+                    _, jpg      = cv2.imencode(".jpg", vis, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    with _lock:
+                        _shared["jpg"] = jpg.tobytes()
+                    status = "ok" if conf >= MIN_CONFIDENCE else "LOW"
+                    print(f"err={error:+.3f}  conf={conf:.2f}  [{status}]")
+            except KeyboardInterrupt:
+                print("Stopped.")
+            finally:
+                server.shutdown()
+                cam.stop()
+
+        elif "--headless" in _args:
             # Headless mode (SSH) — print to stdout, save debug frame every 30 frames.
             # python3 -m src.perception.vision.free_space --headless
             print("Headless mode — Ctrl+C to stop. Saves debug_live.jpg every 30 frames.")
