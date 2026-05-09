@@ -126,8 +126,11 @@ python3 -m src.perception.vision.free_space path/to/frame.jpg
 # Live camera with display (local monitor only)
 python3 -m src.perception.vision.free_space --live
 
-# Live camera over SSH (no display needed)
+# Live camera over SSH — prints to stdout, saves debug_live.jpg every 30 frames
 python3 -m src.perception.vision.free_space --headless
+
+# Live camera streamed to browser — open http://<pi-ip>:8080
+python3 -m src.perception.vision.free_space --stream
 ```
 
 The debug overlay shows:
@@ -200,13 +203,21 @@ There is no machine learning involved — the detector uses classical computer v
 
 ### Step 1 — Collect frames from your actual environment
 
-**Over SSH (headless):**
+**Recommended — stream to browser (SSH-friendly):**
+
+```bash
+python3 -m src.perception.vision.free_space --stream
+```
+
+Open **`http://<pi-ip>:8080`** on your Mac. You see the full debug overlay live — ROI box, density bars, free-lane marker, error and confidence. Press Ctrl+C on the Pi to stop.
+
+**SSH text-only (no browser needed):**
 
 ```bash
 python3 -m src.perception.vision.free_space --headless
 ```
 
-This prints `err` / `conf` to stdout every frame and saves `debug_live.jpg` every 30 frames (~1 sec). Copy frames to your Mac with:
+Prints `err` / `conf` to stdout every frame and saves `debug_live.jpg` every 30 frames (~1 sec). Copy to your Mac with:
 
 ```bash
 scp akar@<pi-ip>:~/robo-pi/debug_live.jpg .

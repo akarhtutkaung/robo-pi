@@ -36,7 +36,6 @@ robo-pi/
 │   │   └── vision/                # stream.py (H.264 config), object_detection.py
 │   ├── navigation/
 │   │   ├── controller.py          # High-level drive commands (forward, steer, smooth_stop)
-│   │   ├── planner.py
 │   │   └── slam/                  # Mapping + localization (planned)
 │   ├── ai/                        # On-device model inference (planned)
 │   ├── comms/
@@ -207,6 +206,7 @@ sudo systemctl start robo-pi
 |------|----------|---------|
 | 8765 | WebSocket | Robot control messages |
 | 8766 | WebSocket | WebRTC signaling (SDP offer/answer) |
+| 8080 | HTTP | Free-space debug overlay MJPEG stream (`--stream` mode, dev only) |
 
 ## WebSocket Protocol
 
@@ -291,6 +291,8 @@ Camera configuration (`cameras.front` / `cameras.back`):
 | `index` | Picamera2 CSI port index (0 = front, 1 = back) |
 | `main_width` / `main_height` | Resolution of the main stream fed to WebRTC |
 | `lores_width` / `lores_height` | Resolution of the lores stream used by OpenCV |
+| `framerate` | Target frame rate passed to Picamera2 `FrameRate` control (default 30.0) |
+| `rotate_180` | `true` if the camera is mounted upside-down — applies `Transform(hflip, vflip)` |
 
 Key ultrasonic thresholds:
 
