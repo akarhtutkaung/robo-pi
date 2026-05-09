@@ -32,8 +32,8 @@ FRAME_W, FRAME_H = 640, 480
 # Rows to analyse. Skip the top (background / ceiling) and the very
 # bottom (rover chassis). Adjust ROI_TOP / ROI_BOTTOM if the camera
 # tilt puts the floor at a different vertical position.
-ROI_TOP    = 200
-ROI_BOTTOM = 400
+ROI_TOP    = 300
+ROI_BOTTOM = 420
 
 # Columns to analyse. The Pi Camera V3 Wide Angle produces zero-edge
 # vignetting at the far left/right, causing argmin to always snap to
