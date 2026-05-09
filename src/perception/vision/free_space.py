@@ -153,7 +153,7 @@ if __name__ == "__main__":
         frame = capture_bgr(cam)
         return frame, cam
 
-    if len(sys.argv) > 1 and sys.argv[1] != "--live":
+    if len(sys.argv) > 1 and sys.argv[1] not in ("--live", "--headless"):
         # Static image mode: python3 -m src.perception.vision.free_space frame.jpg
         frame = _from_file(sys.argv[1])
         error, confidence = detect(frame)
