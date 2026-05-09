@@ -79,5 +79,4 @@ async def run_debug_stream(camera, port: int = 8080, fps: int = 10):
                 shared["jpg"] = jpg
             await asyncio.sleep(sleep)
     except asyncio.CancelledError:
-        server.shutdown()
-        raise
+        raise  # daemon thread exits with the process — no explicit shutdown needed
