@@ -31,7 +31,7 @@ async def on_connect(websocket, controller, camera):
         while True:
             if current_mode == "manual":
                 # run_manual owns the recv loop; returns the requested mode on switch
-                requested = await run_manual(websocket, controller)
+                requested = await run_manual(websocket, controller, camera)
 
                 if requested == "autonomous":
                     current_mode = "autonomous"

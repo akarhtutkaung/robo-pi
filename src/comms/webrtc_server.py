@@ -26,9 +26,9 @@ from src.core.config import WEBRTC_CFG
 from src.perception.camera import CameraVideoTrack
 from src.perception.vision.stream import configure_h264
 
-async def on_signaling(websocket, camera):
+async def on_signaling(websocket, camera, stream_w: int, stream_h: int):
     pc = RTCPeerConnection()
-    track = CameraVideoTrack(camera)
+    track = CameraVideoTrack(camera, stream_w, stream_h)
     pc.addTrack(track)
     configure_h264(pc)   # force H.264 — must be called before setRemoteDescription
 
@@ -64,12 +64,12 @@ async def on_signaling(websocket, camera):
     finally:
         await pc.close()  # camera is owned by start_webrtc_server, not closed here
 
-async def start_webrtc_server(camera: "Picamera2"):
+async def start_webrtc_server(camera, stream_w: int, stream_h: int):
     host = WEBRTC_CFG["host"]
     port = WEBRTC_CFG["port"]
 
     async with websockets.serve(
-        lambda ws: on_signaling(ws, camera),
+        lambda ws: on_signaling(ws, camera, stream_w, stream_h),
         host,
         port
     ) as server:

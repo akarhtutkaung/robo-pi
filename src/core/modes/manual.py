@@ -13,7 +13,7 @@ from src.comms.handlers.dispatch import handle as dispatch_handle
 IDLE_TIMEOUT = 0.3  # seconds before an action is considered stale
 
 
-async def run_manual(websocket, controller) -> str:
+async def run_manual(websocket, controller, camera=None) -> str:
     idle_tasks: dict[str, asyncio.Task] = {}
     last_values: dict[str, object] = {}
     applied: dict[str, object] = {}
@@ -25,6 +25,8 @@ async def run_manual(websocket, controller) -> str:
         if action == "throttle":
             last_values.pop(key, None)
             applied.pop(key, None)
+            if camera:
+                camera.use_front()
             if not controller.is_stopped():
                 await controller.smooth_stop()
         elif action == "steer":
@@ -83,13 +85,19 @@ async def run_manual(websocket, controller) -> str:
                         last_values[key] = speed
                         if not websocket.messages and applied.get(key) != speed:
                             if speed != 0:
+                                if camera:
+                                    camera.use_back() if speed < 0 else camera.use_front()
                                 controller.setSpeed(speed)
                             else:
+                                if camera:
+                                    camera.use_front()
                                 asyncio.create_task(controller.smooth_stop())
                             applied[key] = speed
                         reset_idle(key)
 
                     elif action == "stop":
+                        if camera:
+                            camera.use_front()
                         asyncio.create_task(controller.smooth_stop())
                         controller.center_steering()
                         for k in ("movement:steer", "movement:throttle"):

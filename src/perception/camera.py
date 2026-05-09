@@ -72,18 +72,27 @@ def capture_bgr(camera) -> np.ndarray:
 
 
 class CameraVideoTrack(VideoStreamTrack):
-    """aiortc video track that streams from whichever camera is currently active."""
+    """aiortc video track that streams from whichever camera is currently active.
+
+    All frames are normalized to stream_width × stream_height so the WebRTC
+    session keeps a consistent resolution even when CameraSwitch changes the
+    active camera (e.g. front 1920×1080 ↔ back 640×480).
+    """
 
     kind = "video"
 
-    def __init__(self, camera):
+    def __init__(self, camera, stream_width: int, stream_height: int):
         super().__init__()
         self._camera = camera  # Picamera2 or CameraSwitch
+        self._stream_w = stream_width
+        self._stream_h = stream_height
 
     async def recv(self):
         pts, time_base = await self.next_timestamp()
         arr = self._camera.capture_array()
         frame = VideoFrame.from_ndarray(arr, format="yuv420p")
+        if frame.width != self._stream_w or frame.height != self._stream_h:
+            frame = frame.reformat(width=self._stream_w, height=self._stream_h)
         frame.pts = pts
         frame.time_base = time_base
         return frame

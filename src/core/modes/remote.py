@@ -43,7 +43,7 @@ def run():
         async def _run_all():
             await asyncio.gather(
                 start_server(controller, cameras),
-                start_webrtc_server(cameras),
+                start_webrtc_server(cameras, fc["main_width"], fc["main_height"]),
             )
         asyncio.run(_run_all())
     except KeyboardInterrupt:
