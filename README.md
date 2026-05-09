@@ -128,15 +128,16 @@ Speed changes are applied at 50 Hz. The step size per tick depends on direction:
 ### Free-space detection — Column-wise Canny edge density
 `src/perception/vision/free_space.py` — `detect(frame)`
 
-Camera steering uses a single-pass OpenCV pipeline on a 320×240 BGR frame:
+Camera steering uses a single-pass OpenCV pipeline. The reference resolution is 640×480 (front camera lores). Frames from the back camera (320×240) are upscaled to 640×480 before processing so the same tuning constants apply to both.
 
-1. Crop to a horizontal ROI (rows 100–200) — cuts out ceiling and rover chassis.
-2. Grayscale → Gaussian blur (9×9) → Canny edge detection (lo=30, hi=80).
-3. Sum edges column-wise → 1-D density array (320 values).
-4. Smooth with a 21-wide moving average to prevent noise spikes from winning.
-5. **Free column** = `argmin(smoothed_density)` — column with fewest edges.
-6. **Error** = `(free_col - 160) / 160` → [-1, 1]; negative = free space is left.
-7. **Confidence** = `1 - d_min / d_max` → 0 if the scene is uniformly cluttered or uniformly open.
+1. Resize to 640×480 if needed.
+2. Crop to a horizontal ROI (rows 200–400) — cuts out ceiling and rover chassis.
+3. Grayscale → Gaussian blur (9×9) → Canny edge detection (lo=30, hi=80).
+4. Sum edges column-wise → 1-D density array (640 values).
+5. Smooth with a 41-wide moving average to prevent noise spikes from winning.
+6. **Free column** = `argmin(smoothed_density)` — column with fewest edges.
+7. **Error** = `(free_col - 320) / 320` → [-1, 1]; negative = free space is left.
+8. **Confidence** = `1 - d_min / d_max` → 0 if the scene is uniformly cluttered or uniformly open.
 
 No learning, no model weights — entirely classical CV. Requires `MIN_CONFIDENCE ≥ 0.25` before the signal is acted on.
 

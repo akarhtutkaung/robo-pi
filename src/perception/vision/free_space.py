@@ -24,13 +24,16 @@ import numpy as np
 
 # --- Tunable constants ---------------------------------------------------
 
-FRAME_W, FRAME_H = 320, 240
+# Reference resolution — front camera (Pi Camera V3 Wide Angle) lores stream.
+# Frames from the back camera (320×240) are resized to this before detection
+# so the ROI and kernel constants apply equally to both cameras.
+FRAME_W, FRAME_H = 640, 480
 
 # Rows to analyse. Skip the top (background / ceiling) and the very
 # bottom (rover chassis). Adjust ROI_TOP / ROI_BOTTOM if the camera
 # tilt puts the floor at a different vertical position.
-ROI_TOP    = 100
-ROI_BOTTOM = 200
+ROI_TOP    = 200
+ROI_BOTTOM = 400
 
 # Canny thresholds. Lower values pick up soft edges (carpet texture);
 # higher values ignore them. Raise if you get false obstacles on the floor.
@@ -42,7 +45,7 @@ BLUR_K = 9  # must be odd
 
 # 1-D column smoothing kernel — prevents tiny dips in density from
 # being chosen as the free lane. Wider = more stable, less precise.
-SMOOTH_K = 21  # must be odd
+SMOOTH_K = 41  # must be odd; scaled from 21 at 320 px → 41 at 640 px
 
 # Confidence threshold below which the signal should be treated as
 # unreliable (caller decides what to do — e.g. reduce speed or skip PID).
@@ -54,11 +57,16 @@ _CX = FRAME_W / 2.0
 
 
 def detect(frame: np.ndarray) -> tuple[float, float]:
-    """Return (error, confidence) from a 320×240 BGR frame.
+    """Return (error, confidence) from a BGR frame.
+
+    Frames that don't match FRAME_W×FRAME_H (e.g. back camera at 320×240)
+    are resized before processing so tuning constants apply uniformly.
 
     error      — steering offset, [-1 (full left) … +1 (full right)]
     confidence — detection quality, [0 … 1]
     """
+    if frame.shape[1] != FRAME_W or frame.shape[0] != FRAME_H:
+        frame = cv2.resize(frame, (FRAME_W, FRAME_H))
     roi   = frame[ROI_TOP:ROI_BOTTOM, :]
     gray  = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     blur  = cv2.GaussianBlur(gray, (BLUR_K, BLUR_K), 0)
@@ -81,6 +89,8 @@ def detect(frame: np.ndarray) -> tuple[float, float]:
 
 def draw_debug(frame: np.ndarray, error: float, confidence: float) -> np.ndarray:
     """Annotate a copy of frame with ROI, density bars, and free-lane marker."""
+    if frame.shape[1] != FRAME_W or frame.shape[0] != FRAME_H:
+        frame = cv2.resize(frame, (FRAME_W, FRAME_H))
     vis = frame.copy()
 
     # ROI boundary
