@@ -18,18 +18,22 @@ import cv2
 import numpy as np
 from aiortc import VideoStreamTrack
 from av import VideoFrame
+from libcamera import Transform
 from picamera2 import Picamera2
 
 
 def make_camera(index: int, width: int, height: int,
                 lores_width: int, lores_height: int,
-                framerate: float = 30.0) -> Picamera2:
+                framerate: float = 30.0,
+                rotate_180: bool = False) -> Picamera2:
     """Create, configure, and start a Picamera2 instance on the given CSI index."""
     camera = Picamera2(index)
+    transform = Transform(hflip=True, vflip=True) if rotate_180 else Transform()
     cfg = camera.create_video_configuration(
         main={"size": (width, height), "format": "YUV420"},
         lores={"size": (lores_width, lores_height), "format": "YUV420"},
         controls={"FrameRate": framerate},
+        transform=transform,
     )
     camera.configure(cfg)
     camera.start()

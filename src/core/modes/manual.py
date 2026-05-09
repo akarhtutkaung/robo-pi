@@ -112,6 +112,8 @@ async def run_manual(websocket, controller, camera=None) -> str:
 
             except asyncio.TimeoutError:
                 cancel_all()
+                if camera:
+                    camera.use_front()
                 controller.center_steering()
                 if not controller.is_stopped():
                     await controller.smooth_stop()

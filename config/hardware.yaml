@@ -61,6 +61,7 @@ cameras:
     lores_width: 320
     lores_height: 240
     framerate: 30.0
+    rotate_180: true      # Mounted upside down
 
 ultrasonic:
   trigger_pin: 23
