@@ -12,21 +12,21 @@
 │                                                                 │
 │  I2C Bus ─────────────────────────────────────────────────────  │
 │  │                                                              │
-│  ├── PCA9685 PWM (0x5f) ──┬── ch 15/14  →  Rear DC motor      │
-│  │                         ├── ch 0      →  Servo 0 (steering) │
-│  │                         ├── ch 1      →  Servo 1 (head L/R) │
-│  │                         └── ch 2      →  Servo 2 (head U/D) │
+│  ├── PCA9685 PWM (0x5f)   ──┬── ch 15/14  →  Rear DC motor      │
+│  │                          ├── ch 0      →  Servo 0 (steering) │
+│  │                          ├── ch 1      →  Servo 1 (head L/R) │
+│  │                          └── ch 2      →  Servo 2 (head U/D) │
 │  │                                                              │
-│  └── ADS7830 ADC   (0x48) ──── light sensors / battery voltage │
+│  └── ADS7830 ADC   (0x48)  ──── light sensors / battery voltage │
 │                                                                 │
-│  GPIO ─────────────────────────────────────────────────────── │
-│  ├── GPIO 23/24  →  Ultrasonic HC-SR04 (trigger / echo)        │
-│  ├── GPIO 22/27/17  →  Line tracking sensors (L / M / R)       │
+│  GPIO ───────────────────────────────────────────────────────── │
+│  ├── GPIO 23/24  →  Ultrasonic HC-SR04 (trigger / echo)         │
+│  ├── GPIO 22/27/17  →  Line tracking sensors (L / M / R)        │
 │  ├── GPIO 18     →  Buzzer                                      │
-│  └── GPIO 12     →  WS2812 NeoPixel LED strip                  │
+│  └── GPIO 12     →  WS2812 NeoPixel LED strip                   │
 │                                                                 │
-│  CSI ──────────────────────────────────────────────────────── │
-│  └── Camera Module  →  Picamera2 (640×480 main + 320×240 lores)│
+│  CSI ────────────────────────────────────────────────────────── │
+│  └── Camera Module  →  Picamera2 (640×480 main + 320×240 lores) │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -47,15 +47,15 @@
        │
        ├─────────────────────────┬─────────────────────────────┐
        │                         │                             │
-┌──────▼──────┐        ┌─────────▼────────┐        ┌──────────▼──────┐
-│  src/comms/ │        │  src/perception/ │        │ src/navigation/ │  ← domain logic
-└──────┬──────┘        └─────────┬────────┘        └──────────┬──────┘
+┌──────▼──────┐        ┌─────────▼────────┐         ┌──────────▼──────┐
+│  src/comms/ │        │  src/perception/ │         │ src/navigation/ │  ← domain logic
+└──────┬──────┘        └─────────┬────────┘         └──────────┬──────┘
        │                         │                             │
        └─────────────────────────┴─────────────────────────────┘
                                  │
 ┌────────────────────────────────▼───────────────────────────────┐
 │                       src/hardware/                            │  ← hardware drivers
-│         motors.py   servos.py   sensors/ultrasonic.py         │
+│         motors.py   servos.py   sensors/ultrasonic.py          │
 └────────────────────────────────────────────────────────────────┘
                                  │
                      ────────────▼───────────

@@ -88,6 +88,71 @@ The autonomous loop runs a three-tier speed approach and a K-turn avoidance mane
 2. Choose direction with greater clearance
 3. Steer toward clear side → reverse → opposite steer → forward → center steering
 
+## Algorithms
+
+### Obstacle Detection — Ultrasonic threshold zones
+`src/hardware/sensors/ultrasonic.py` + `autonomous.py`
+
+Distance is read from an HC-SR04 sensor and classified into four zones each loop tick. No state machine or prediction — pure threshold comparison on the raw reading.
+
+| Zone | Trigger | Action |
+|------|---------|--------|
+| Cruise | `distance > turn_cm` (90 cm) | Full speed forward |
+| Approach | `stop_cm < distance ≤ turn_cm` | Reduce to `approach_speed` |
+| Blocked | `distance ≤ stop_cm` (30 cm) | Physics-based smooth stop (see below) |
+| Sudden stop | `distance < sudden_stop_cm` (20 cm) | Immediate hard cut |
+
+### Stopping — Physics-based deceleration rate
+`src/core/modes/autonomous.py` — `navigate_step()`
+
+When blocked, the required deceleration rate is derived from kinematics rather than a fixed value:
+
+```
+required_rate = v² × cm_per_speed_unit / (2 × d_target)
+```
+
+where `v` is current speed, `d_target = distance - 5 cm` safety margin. This targets a stop exactly 5 cm from the obstacle regardless of approach speed.
+
+### Motor speed ramping — Fixed-rate ramp loop
+`src/hardware/motors.py` — `RearMotor._ramp_loop()`
+
+Speed changes are applied at 50 Hz. The step size per tick depends on direction:
+
+- **Accelerating forward** → `accelerate_rate × 0.02 s`
+- **Into reverse from stop** → `reverse_accelerate_rate × 0.02 s` (slow creep)
+- **Decelerating toward zero** → `decelerate_rate × 0.02 s`
+
+`smooth_stop()` runs the same loop as an `async` coroutine and blocks until the motor reaches zero.
+
+### Free-space detection — Column-wise Canny edge density
+`src/perception/vision/free_space.py` — `detect(frame)`
+
+Camera steering uses a single-pass OpenCV pipeline on a 320×240 BGR frame:
+
+1. Crop to a horizontal ROI (rows 100–200) — cuts out ceiling and rover chassis.
+2. Grayscale → Gaussian blur (9×9) → Canny edge detection (lo=30, hi=80).
+3. Sum edges column-wise → 1-D density array (320 values).
+4. Smooth with a 21-wide moving average to prevent noise spikes from winning.
+5. **Free column** = `argmin(smoothed_density)` — column with fewest edges.
+6. **Error** = `(free_col - 160) / 160` → [-1, 1]; negative = free space is left.
+7. **Confidence** = `1 - d_min / d_max` → 0 if the scene is uniformly cluttered or uniformly open.
+
+No learning, no model weights — entirely classical CV. Requires `MIN_CONFIDENCE ≥ 0.25` before the signal is acted on.
+
+### Avoidance maneuver — K-turn
+`src/core/modes/autonomous.py` — `navigate_step()` blocked branch
+
+When the rover is blocked and the camera reports a confident free-space direction, it executes a fixed-timing K-turn:
+
+1. Steer toward free side (full lock).
+2. Reverse for 1.5 s.
+3. Smooth stop → steer opposite lock.
+4. Drive forward 1.0 s → center steering → smooth stop.
+
+If confidence is too low (all directions obstructed), reverse straight for 2 s and reassess.
+
+> **Planned replacement:** PID loop for steering (see `Todo.md`) — replaces the fixed-angle steer in the "clear" phase and the K-turn with proportional corrections.
+
 ## Getting Started
 
 ### Setup (first time on Pi)

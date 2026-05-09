@@ -20,3 +20,12 @@
   - replace harsh stop with proportional steer correction
 - [ ] Replace K-turn logic in navigate_step with PID loop
 - [ ] Keep ultrasonic is_sudden_stop() as the only emergency hard-stop trigger
+
+## Realife movement
+- [ ] Make head move like real life boring movement if nothing had been doing over threshold
+- [ ] Make body move like real life boring movement if nothing had been doing over threshold
+
+## Microphone
+- [ ] Instead of controlling from pc, control the auto drive via microphone
+- [ ] Speech recognization and turn the head directly to where it was calling, then mark the possible location. Then move to that location.
+- [ ]
