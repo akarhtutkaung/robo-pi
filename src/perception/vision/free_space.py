@@ -145,7 +145,11 @@ if __name__ == "__main__":
 
     def _from_camera() -> tuple[np.ndarray, "Picamera2"]:
         from src.perception.camera import make_camera, capture_bgr  # type: ignore
-        cam   = make_camera()
+        from src.core.config import CAMERA_CFG  # type: ignore
+        fc  = CAMERA_CFG["front"]
+        cam = make_camera(fc["index"], fc["main_width"], fc["main_height"],
+                          fc["lores_width"], fc["lores_height"], fc["framerate"],
+                          fc.get("rotate_180", False))
         frame = capture_bgr(cam)
         return frame, cam
 
@@ -163,7 +167,11 @@ if __name__ == "__main__":
         # Live mode: python3 -m src.perception.vision.free_space [--live]
         print("Live mode — press 's' to save a frame, 'q' to quit.")
         from src.perception.camera import make_camera, capture_bgr  # type: ignore
-        cam   = make_camera()
+        from src.core.config import CAMERA_CFG  # type: ignore
+        fc  = CAMERA_CFG["front"]
+        cam = make_camera(fc["index"], fc["main_width"], fc["main_height"],
+                          fc["lores_width"], fc["lores_height"], fc["framerate"],
+                          fc.get("rotate_180", False))
         saved = 0
         try:
             while True:
