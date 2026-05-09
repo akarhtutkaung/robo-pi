@@ -112,6 +112,8 @@ confidence = 1 - (lowest density / highest density)
 | `FRAME_W / FRAME_H` | 640 / 480 | Reference resolution — all frames are resized to this before processing |
 | `ROI_TOP` | 200 | Top of the analysis band — raise if ceiling appears in the ROI |
 | `ROI_BOTTOM` | 400 | Bottom of the analysis band — lower if chassis is visible |
+| `ROI_LEFT` | 80 | Left column of the analysis band — raise to exclude wide-angle vignetting |
+| `ROI_RIGHT` | 560 | Right column of the analysis band — lower to exclude wide-angle vignetting |
 | `BLUR_K` | 9 | Blur strength before edge detection — raise for textured floors |
 | `CANNY_LO / HI` | 30 / 80 | Edge sensitivity — raise both if floor texture triggers false edges |
 | `SMOOTH_K` | 41 | Column smoothing width — raise if free_col jitters left/right |
@@ -248,6 +250,8 @@ python3 -m src.perception.vision.free_space frame_000.jpg
 | What you see | Problem | Fix |
 |---|---|---|
 | Grey bars everywhere — carpet/texture detected as obstacle | `BLUR_K` too low or `CANNY_LO` too low | Raise `BLUR_K` to 13 or 15 (must stay odd); raise `CANNY_LO` to 50–60 |
+| Green line always snaps to the far left | Wide-angle lens vignetting — leftmost columns have zero edge density | Raise `ROI_LEFT` (default 80) until bars on the left side are non-zero |
+| Green line always snaps to the far right | Same effect on right side | Lower `ROI_RIGHT` (default 560) until right-side bars are non-zero |
 | Green line jumps left/right between frames | Density curve too spiky | Raise `SMOOTH_K` to 51 or 61 |
 | Yellow ROI includes ceiling or robot chassis | ROI framing is wrong | Raise `ROI_TOP` to push the band down; lower `ROI_BOTTOM` to cut the bottom |
 | `conf` always low (< 0.25) in a clear corridor | Floor has no edges so density is uniformly low | Lower `MIN_CONFIDENCE` to 0.1, or tilt camera slightly downward to include more wall base |
@@ -273,3 +277,55 @@ Once all saved frames produce sensible readings the detector is ready to run on 
 3. `CANNY_LO` / `CANNY_HI` — edge sensitivity
 4. `SMOOTH_K` — stability of the free-lane column
 5. `MIN_CONFIDENCE` — threshold for trusting the signal
+
+## 5. Adjustment
+The best starting point is to see what the detector actually sees. Run
+   the stream while pointing the robot at different spots:              
+                                                                        
+  python3 main.py --mode remote                                         
+
+  Then open http://<pi-ip>:8080 and look at the overlay.                
+                                          
+  What to look for:                                                     
+                                                                        
+  - Yellow box — is it covering the floor/path in front? Or is it
+  hitting walls, ceiling, or the chassis?                               
+  - Grey density bars — are they uniformly high everywhere, or clearly
+  higher on one side?                                                   
+  - Green line — is it stuck at the left or right edge of the frame?
+                                                                        
+  Most likely causes and fixes:                                         
+   
+  ┌───────────────────┬──────────────────────┬──────────────────────┐   
+  │ What you see in   │        Cause         │ Fix in free_space.py │
+  │    the stream     │                      │                      │   
+  ├───────────────────┼──────────────────────┼──────────────────────┤   
+  │ Yellow ROI        │ ROI_TOP too high     │ Raise ROI_TOP from   │
+  │ includes walls or │ (band starts too     │ 200 → 250 or 280     │   
+  │  ceiling          │ early)               │                      │
+  ├───────────────────┼──────────────────────┼──────────────────────┤
+  │ Yellow ROI        │                      │ Lower ROI_BOTTOM     │   
+  │ includes rover    │ ROI_BOTTOM too low   │ from 400 → 350       │
+  │ chassis           │                      │                      │   
+  ├───────────────────┼──────────────────────┼──────────────────────┤
+  │ Grey bars are     │ CANNY_LO too         │ Raise CANNY_LO from  │   
+  │ high everywhere — │ sensitive            │ 30 → 50 or 60        │
+  │  noisy floor      │                      │                      │   
+  ├───────────────────┼──────────────────────┼──────────────────────┤
+  │ Green line always │ One side of ROI has  │ Adjust ROI or        │   
+  │  snaps to one     │ a wall/furniture in  │ physically centre    │
+  │ extreme           │ every frame          │ the camera           │   
+  ├───────────────────┼──────────────────────┼──────────────────────┤   
+  │ Density bars look │ Open room, no        │ Lower MIN_CONFIDENCE │
+  │  flat/uniform     │ visible corridor     │  or point at a       │   
+  │                   │ walls                │ narrower space       │
+  └───────────────────┴──────────────────────┴──────────────────────┘
+                                                                        
+  Quick first thing to try — tighten the ROI to a narrower floor band:
+                                                                        
+  ROI_TOP    = 250   # was 200                              
+  ROI_BOTTOM = 380   # was 400                                          
+   
+  This cuts out more of the scene and focuses purely on the floor       
+  directly ahead. Then re-open the stream and see if the density bars
+  show a clearer left/right contrast.

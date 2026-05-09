@@ -35,6 +35,12 @@ FRAME_W, FRAME_H = 640, 480
 ROI_TOP    = 200
 ROI_BOTTOM = 400
 
+# Columns to analyse. The Pi Camera V3 Wide Angle produces zero-edge
+# vignetting at the far left/right, causing argmin to always snap to
+# column 0. Trim those columns out so the search stays in the valid area.
+ROI_LEFT  = 80
+ROI_RIGHT = 560
+
 # Canny thresholds. Lower values pick up soft edges (carpet texture);
 # higher values ignore them. Raise if you get false obstacles on the floor.
 CANNY_LO = 30
@@ -51,7 +57,8 @@ SMOOTH_K = 41  # must be odd; scaled from 21 at 320 px → 41 at 640 px
 # unreliable (caller decides what to do — e.g. reduce speed or skip PID).
 MIN_CONFIDENCE = 0.25
 
-_CX = FRAME_W / 2.0
+_ROI_W = ROI_RIGHT - ROI_LEFT
+_CX    = _ROI_W / 2.0
 
 # -------------------------------------------------------------------------
 
@@ -67,12 +74,12 @@ def detect(frame: np.ndarray) -> tuple[float, float]:
     """
     if frame.shape[1] != FRAME_W or frame.shape[0] != FRAME_H:
         frame = cv2.resize(frame, (FRAME_W, FRAME_H))
-    roi   = frame[ROI_TOP:ROI_BOTTOM, :]
+    roi   = frame[ROI_TOP:ROI_BOTTOM, ROI_LEFT:ROI_RIGHT]
     gray  = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     blur  = cv2.GaussianBlur(gray, (BLUR_K, BLUR_K), 0)
     edges = cv2.Canny(blur, CANNY_LO, CANNY_HI)
 
-    density = edges.sum(axis=0).astype(float)          # (320,) edge count per column
+    density = edges.sum(axis=0).astype(float)          # (_ROI_W,) edge count per column
 
     kernel  = np.ones(SMOOTH_K) / SMOOTH_K
     smooth  = np.convolve(density, kernel, mode="same")
@@ -93,11 +100,11 @@ def draw_debug(frame: np.ndarray, error: float, confidence: float) -> np.ndarray
         frame = cv2.resize(frame, (FRAME_W, FRAME_H))
     vis = frame.copy()
 
-    # ROI boundary
-    cv2.rectangle(vis, (0, ROI_TOP), (FRAME_W - 1, ROI_BOTTOM - 1), (0, 255, 255), 1)
+    # ROI boundary (includes horizontal crop)
+    cv2.rectangle(vis, (ROI_LEFT, ROI_TOP), (ROI_RIGHT - 1, ROI_BOTTOM - 1), (0, 255, 255), 1)
 
     # Recompute density for visualisation
-    roi    = frame[ROI_TOP:ROI_BOTTOM, :]
+    roi    = frame[ROI_TOP:ROI_BOTTOM, ROI_LEFT:ROI_RIGHT]
     gray   = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     blur   = cv2.GaussianBlur(gray, (BLUR_K, BLUR_K), 0)
     edges  = cv2.Canny(blur, CANNY_LO, CANNY_HI)
@@ -105,21 +112,23 @@ def draw_debug(frame: np.ndarray, error: float, confidence: float) -> np.ndarray
     kernel  = np.ones(SMOOTH_K) / SMOOTH_K
     smooth  = np.convolve(density, kernel, mode="same")
 
-    # Draw density bars along the bottom of the frame
+    # Draw density bars along the bottom of the frame, offset to ROI_LEFT
     if smooth.max() > 0:
         bar_h    = 40
         bar_top  = FRAME_H - bar_h
         norm     = smooth / smooth.max()
-        for x, v in enumerate(norm):
+        for i, v in enumerate(norm):
+            x     = ROI_LEFT + i
             bar_y = int(bar_top + bar_h * (1 - v))
             cv2.line(vis, (x, FRAME_H - 1), (x, bar_y), (180, 180, 180), 1)
 
-    # Free-lane marker
-    free_col = int(np.argmin(smooth))
-    cv2.line(vis, (free_col, ROI_TOP), (free_col, ROI_BOTTOM - 1), (0, 255, 0), 2)
+    # Free-lane marker (offset back into full-frame coordinates)
+    free_col    = int(np.argmin(smooth))
+    free_col_px = ROI_LEFT + free_col
+    cv2.line(vis, (free_col_px, ROI_TOP), (free_col_px, ROI_BOTTOM - 1), (0, 255, 0), 2)
 
-    # Frame centre
-    cx = int(_CX)
+    # ROI centre (blue reference line)
+    cx = ROI_LEFT + int(_CX)
     cv2.line(vis, (cx, ROI_TOP), (cx, ROI_BOTTOM - 1), (255, 100, 100), 1)
 
     # Text overlay
