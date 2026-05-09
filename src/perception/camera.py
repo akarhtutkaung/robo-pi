@@ -22,12 +22,14 @@ from picamera2 import Picamera2
 
 
 def make_camera(index: int, width: int, height: int,
-                lores_width: int, lores_height: int) -> Picamera2:
+                lores_width: int, lores_height: int,
+                framerate: float = 30.0) -> Picamera2:
     """Create, configure, and start a Picamera2 instance on the given CSI index."""
     camera = Picamera2(index)
     cfg = camera.create_video_configuration(
         main={"size": (width, height), "format": "YUV420"},
         lores={"size": (lores_width, lores_height), "format": "YUV420"},
+        controls={"FrameRate": framerate},
     )
     camera.configure(cfg)
     camera.start()

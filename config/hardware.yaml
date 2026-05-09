@@ -53,12 +53,14 @@ cameras:
     main_height: 1080
     lores_width: 640
     lores_height: 480
+    framerate: 30.0
   back:
     index: 1              # Back camera — CSI port 1
     main_width: 640
     main_height: 480
     lores_width: 320
     lores_height: 240
+    framerate: 30.0
 
 ultrasonic:
   trigger_pin: 23
