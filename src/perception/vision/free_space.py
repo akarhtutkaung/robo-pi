@@ -164,29 +164,53 @@ if __name__ == "__main__":
         cv2.destroyAllWindows()
 
     else:
-        # Live mode: python3 -m src.perception.vision.free_space [--live]
-        print("Live mode — press 's' to save a frame, 'q' to quit.")
+        headless = "--headless" in sys.argv or "--live" not in sys.argv
+
         from src.perception.camera import make_camera, capture_bgr  # type: ignore
         from src.core.config import CAMERA_CFG  # type: ignore
         fc  = CAMERA_CFG["front"]
         cam = make_camera(fc["index"], fc["main_width"], fc["main_height"],
                           fc["lores_width"], fc["lores_height"], fc["framerate"],
                           fc.get("rotate_180", False))
-        saved = 0
-        try:
-            while True:
-                frame          = capture_bgr(cam)
-                error, conf    = detect(frame)
-                vis            = draw_debug(frame, error, conf)
-                cv2.imshow("free_space", vis)
-                key = cv2.waitKey(30) & 0xFF
-                if key == ord("q"):
-                    break
-                if key == ord("s"):
-                    path = f"frame_{saved:03d}.jpg"
-                    cv2.imwrite(path, frame)
-                    print(f"Saved {path}  error={error:+.3f}  conf={conf:.3f}")
-                    saved += 1
-        finally:
-            cam.stop()
-            cv2.destroyAllWindows()
+
+        if headless:
+            # Headless mode (SSH) — print to stdout, save debug frame every 30 frames.
+            # python3 -m src.perception.vision.free_space --headless
+            print("Headless mode — Ctrl+C to stop. Saves debug_live.jpg every 30 frames.")
+            tick = 0
+            try:
+                while True:
+                    frame       = capture_bgr(cam)
+                    error, conf = detect(frame)
+                    status = "ok" if conf >= MIN_CONFIDENCE else "LOW"
+                    print(f"err={error:+.3f}  conf={conf:.2f}  [{status}]")
+                    if tick % 30 == 0:
+                        cv2.imwrite("debug_live.jpg", draw_debug(frame, error, conf))
+                    tick += 1
+            except KeyboardInterrupt:
+                print("Stopped.")
+            finally:
+                cam.stop()
+
+        else:
+            # Live display mode (requires a local display).
+            # python3 -m src.perception.vision.free_space --live
+            print("Live mode — press 's' to save a frame, 'q' to quit.")
+            saved = 0
+            try:
+                while True:
+                    frame          = capture_bgr(cam)
+                    error, conf    = detect(frame)
+                    vis            = draw_debug(frame, error, conf)
+                    cv2.imshow("free_space", vis)
+                    key = cv2.waitKey(30) & 0xFF
+                    if key == ord("q"):
+                        break
+                    if key == ord("s"):
+                        path = f"frame_{saved:03d}.jpg"
+                        cv2.imwrite(path, frame)
+                        print(f"Saved {path}  error={error:+.3f}  conf={conf:.3f}")
+                        saved += 1
+            finally:
+                cam.stop()
+                cv2.destroyAllWindows()
