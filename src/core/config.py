@@ -21,6 +21,7 @@ SERVO_CFG      = _hw["servos"]      # servo0/1/2 channels and angle limits
 WS_CFG         = _hw["websocket"]   # host and port
 WEBRTC_CFG     = _hw["webrtc"]      # host and port for WebRTC signaling WS
 ULTRASONIC_CFG = _hw["ultrasonic"]  # trigger and echo pins
-CAMERA_CFG     = _hw["cameras"]     # front/back index and resolution
+CAMERA_CFG        = _hw["cameras"]       # front/back index and resolution
+DEBUG_STREAM_CFG  = _hw["debug_stream"]  # enabled, port, fps
 
 AUTONOMOUS_CFG = _modes["autonomous"]  # speed constants for autonomous mode

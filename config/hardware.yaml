@@ -38,6 +38,11 @@ servos:
     max_angle: 25
     min_angle: 120
 
+debug_stream:
+  enabled: true
+  port: 8080
+  fps: 10
+
 websocket:
   host: "0.0.0.0"     # Listen on all interfaces so Mac can connect over WiFi
   port: 8765
