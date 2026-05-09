@@ -29,7 +29,7 @@ robo-pi/
 │   │       ├── light_tracking.py  # ADC light sensors (ADS7830)
 │   │       └── battery.py         # Battery voltage monitoring
 │   ├── perception/                # Sensor data → interpreted signals
-│   │   ├── camera.py              # CameraVideoTrack — picamera2 YUV420 → aiortc VideoStreamTrack
+│   │   ├── camera.py              # make_camera(), CameraSwitch, CameraVideoTrack, capture_bgr()
 │   │   ├── vision/
 │   │   │   ├── stream.py          # configure_h264(pc) — forces H.264 codec on RTCPeerConnection
 │   │   │   ├── gesture.py         # Hand gesture → movement command
@@ -39,7 +39,6 @@ robo-pi/
 │   │       └── commands.py        # Recognized text → robot command
 │   ├── navigation/                # Movement logic and mapping
 │   │   ├── controller.py          # High-level drive commands (forward, turn, stop)
-│   │   ├── planner.py             # Path planning
 │   │   └── slam/
 │   │       ├── mapper.py          # Build and update map
 │   │       └── localizer.py       # Estimate position within map
@@ -97,7 +96,11 @@ The system is being built incrementally:
   - Adding a new handler type: create `protocols/<domain>.py` + `handlers/<domain>.py`, then add one entry to `HANDLERS` in `dispatch.py`
   - WebRTC signaling runs on a separate port (8766) and is independent of this server
 - **Camera + WebRTC streaming** — `src/perception/camera.py`, `src/perception/vision/stream.py`, `src/comms/webrtc_server.py`
-  - `CameraVideoTrack` captures YUV420 frames via picamera2 and feeds them to aiortc
+  - Two cameras: front = Pi Camera V3 Wide Angle (CSI 0, 1920×1080 main / 640×480 lores), back = rear camera (CSI 1, 640×480 main / 320×240 lores). Resolutions are in `config/hardware.yaml` under `cameras.front` / `cameras.back`.
+  - `make_camera(index, width, height, lores_width, lores_height)` creates and starts a Picamera2 instance on the given CSI port.
+  - `CameraSwitch` holds both cameras and exposes the active one via `capture_array()`. Call `use_back()` before any reverse move and `use_front()` once stopped and going forward — both the WebRTC stream and `capture_bgr()` follow automatically.
+  - `CameraVideoTrack` accepts either a `Picamera2` or `CameraSwitch` — same duck-typed `capture_array()` API.
+  - `capture_bgr(camera)` reads the lores stream and converts YUV420 → BGR for OpenCV. Also accepts either type.
   - `configure_h264(pc)` in `stream.py` forces H.264 codec on the `RTCPeerConnection` before SDP negotiation — must be called after `addTrack()` and before `setRemoteDescription()`
   - `webrtc_server.py` runs a WebSocket signaling server on port 8766; handles SDP offer/answer (vanilla ICE — Pi waits for full ICE gathering before sending answer)
   - Ports: 8765 = control WS, 8766 = WebRTC signaling WS

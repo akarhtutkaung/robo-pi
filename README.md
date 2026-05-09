@@ -9,7 +9,8 @@ Software system for an **Adeept PiCar-B Mars Rover** running on a Raspberry Pi. 
 | Platform | Adeept PiCar-B (Raspberry Pi) |
 | Motor | Rear DC motor via PCA9685 PWM controller (`0x5f`) |
 | Servos | Steering (ch0), head L/R (ch1), head U/D (ch2) |
-| Camera | Pi Camera (picamera2 → WebRTC H.264 stream) |
+| Front camera | Pi Camera V3 Wide Angle — CSI port 0 (1920×1080 WebRTC, 640×480 OpenCV) |
+| Back camera | Rear camera — CSI port 1 (640×480 WebRTC, 320×240 OpenCV) |
 | Sensors | Ultrasonic HC-SR04 (GPIO 23/24), line tracking (GPIO 22/27/17), light tracking (ADS7830 ADC `0x48`) |
 | LEDs | RGB LEDs (GPIO 9/25/11, 19/0/13, 1/5/6) + WS2812 strip |
 | Buzzer | GPIO 18 |
@@ -31,7 +32,7 @@ robo-pi/
 │   │   ├── buzzer.py
 │   │   └── sensors/               # Ultrasonic, line, light, battery
 │   ├── perception/                # Sensor data → interpreted signals
-│   │   ├── camera.py              # CameraVideoTrack (picamera2 → aiortc)
+│   │   ├── camera.py              # make_camera(), CameraSwitch, CameraVideoTrack, capture_bgr()
 │   │   └── vision/                # stream.py (H.264 config), object_detection.py
 │   ├── navigation/
 │   │   ├── controller.py          # High-level drive commands (forward, steer, smooth_stop)
@@ -255,7 +256,16 @@ Switches the robot between autonomous obstacle-avoidance and manual remote-contr
 
 ## Camera Streaming
 
-The Pi streams video over WebRTC. Connect to the signaling server at `ws://<pi-ip>:8766`, send an SDP offer, receive an H.264 answer. ICE gathering completes on the Pi before the answer is sent (vanilla ICE — no trickle).
+The Pi runs two cameras managed by `CameraSwitch` (`src/perception/camera.py`):
+
+| Camera | CSI port | Main stream | Lores (OpenCV) | Used for |
+|--------|----------|-------------|----------------|----------|
+| Front — Pi Camera V3 Wide | 0 | 1920×1080 | 640×480 | Forward driving, free-space detection, WebRTC when moving forward or stopped |
+| Back | 1 | 640×480 | 320×240 | Reversing visibility, free-space detection during reverse, WebRTC during reverse |
+
+The WebRTC stream and OpenCV vision always read from the same active camera. `CameraSwitch` switches the active camera automatically: `use_back()` is called before any reverse move, `use_front()` is called once the rover is stopped and ready to go forward again.
+
+Connect to the signaling server at `ws://<pi-ip>:8766`, send an SDP offer, receive an H.264 answer. ICE gathering completes on the Pi before the answer is sent (vanilla ICE — no trickle).
 
 ## Configuration
 
@@ -272,6 +282,14 @@ Key motor parameters:
 | `reverse_accelerate_rate` | 3 | Units/sec ramp-up into reverse — slow creep |
 | `decelerate_rate` | 200 | Units/sec ramp-down in `smooth_stop()` |
 | `cm_per_speed_unit` | 1.2 | **Calibrate this** — cm/s per throttle unit (see below) |
+
+Camera configuration (`cameras.front` / `cameras.back`):
+
+| Key | Description |
+|-----|-------------|
+| `index` | Picamera2 CSI port index (0 = front, 1 = back) |
+| `main_width` / `main_height` | Resolution of the main stream fed to WebRTC |
+| `lores_width` / `lores_height` | Resolution of the lores stream used by OpenCV |
 
 Key ultrasonic thresholds:
 
