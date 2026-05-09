@@ -1,16 +1,20 @@
 """
 Free-space detector for autonomous steering.
 
-Algorithm: column-wise Canny edge density inside a horizontal ROI.
-Free space = the column range with the fewest edges. Works without
-knowing the floor color and handles varied indoor lighting.
+Algorithm: per-column floor-colour coverage (primary) minus edge-density
+penalty (secondary). Free space = the column with the most floor-coloured
+pixels and the fewest obstacle edges.
+
+Floor colour is matched in HSV — tune FLOOR_S_MAX / FLOOR_V_MIN for your
+floor. The default targets white/light-grey tiles (low saturation, high
+brightness). Smooth obstacles like wood or plastic have higher saturation
+or different hue and score near zero even with no interior edges.
 
 Public API:
     detect(frame)  →  (error: float, confidence: float)
 
     error      — [-1, 1]. Negative = free space is left of centre, positive = right.
-    confidence — [0, 1].  Low means the scene has no clear free lane
-                          (uniform clutter or uniform open space).
+    confidence — [0, 1].  Low means the scene has no clear free lane.
 
 Tune the constants at the top of this file.
 Run the offline prototype to visualise detection on saved frames:
@@ -57,10 +61,41 @@ SMOOTH_K = 41  # must be odd; scaled from 21 at 320 px → 41 at 640 px
 # unreliable (caller decides what to do — e.g. reduce speed or skip PID).
 MIN_CONFIDENCE = 0.25
 
+# Floor colour mask (HSV).
+#   FLOOR_S_MAX — max saturation for a pixel to count as floor.
+#                 0 = pure grey/white; 255 = vivid colour.
+#                 Raise to ~80 if your floor has a warm or cool tint (e.g. beige).
+#   FLOOR_V_MIN — minimum brightness. Lower to ~70 for darker tile floors.
+FLOOR_S_MAX = 60
+FLOOR_V_MIN = 100
+
 _ROI_W = ROI_RIGHT - ROI_LEFT
 _CX    = _ROI_W / 2.0
 
 # -------------------------------------------------------------------------
+
+
+def _passability(roi: np.ndarray) -> np.ndarray:
+    """Per-column passability score for a cropped ROI (BGR).
+
+    Higher = more likely open floor. Uses floor colour coverage as the
+    primary signal so smooth-faced obstacles (wood, plastic) score low
+    even when they have no interior edges.
+    """
+    kernel = np.ones(SMOOTH_K) / SMOOTH_K
+
+    hsv        = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    floor_mask = (hsv[:, :, 1] <= FLOOR_S_MAX) & (hsv[:, :, 2] >= FLOOR_V_MIN)
+    floor_col  = np.convolve(floor_mask.sum(axis=0).astype(float), kernel, mode="same")
+
+    gray       = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    blur       = cv2.GaussianBlur(gray, (BLUR_K, BLUR_K), 0)
+    edges      = cv2.Canny(blur, CANNY_LO, CANNY_HI)
+    edge_col   = np.convolve(edges.sum(axis=0).astype(float), kernel, mode="same")
+
+    floor_norm = floor_col / (floor_col.max() + 1e-6)
+    edge_norm  = edge_col  / (edge_col.max()  + 1e-6)
+    return floor_norm - 0.5 * edge_norm
 
 
 def detect(frame: np.ndarray) -> tuple[float, float]:
@@ -74,28 +109,26 @@ def detect(frame: np.ndarray) -> tuple[float, float]:
     """
     if frame.shape[1] != FRAME_W or frame.shape[0] != FRAME_H:
         frame = cv2.resize(frame, (FRAME_W, FRAME_H))
-    roi   = frame[ROI_TOP:ROI_BOTTOM, ROI_LEFT:ROI_RIGHT]
-    gray  = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-    blur  = cv2.GaussianBlur(gray, (BLUR_K, BLUR_K), 0)
-    edges = cv2.Canny(blur, CANNY_LO, CANNY_HI)
 
-    density = edges.sum(axis=0).astype(float)          # (_ROI_W,) edge count per column
+    score    = _passability(frame[ROI_TOP:ROI_BOTTOM, ROI_LEFT:ROI_RIGHT])
+    free_col = int(np.argmax(score))
+    error    = (free_col - _CX) / _CX
 
-    kernel  = np.ones(SMOOTH_K) / SMOOTH_K
-    smooth  = np.convolve(density, kernel, mode="same")
-
-    free_col   = int(np.argmin(smooth))
-    error      = (free_col - _CX) / _CX
-
-    d_min      = smooth[free_col]
-    d_max      = smooth.max()
-    confidence = float(np.clip(1.0 - d_min / (d_max + 1e-6), 0.0, 1.0))
+    p_best     = score[free_col]
+    p_worst    = score.min()
+    confidence = float(np.clip(
+        (p_best - p_worst) / (abs(p_best) + abs(p_worst) + 1e-6), 0.0, 1.0
+    ))
 
     return float(error), confidence
 
 
 def draw_debug(frame: np.ndarray, error: float, confidence: float) -> np.ndarray:
-    """Annotate a copy of frame with ROI, density bars, and free-lane marker."""
+    """Annotate a copy of frame with ROI, passability bars, and free-lane marker.
+
+    Grey bars at the bottom show per-column passability — taller = more
+    passable (more floor colour, fewer obstacle edges).
+    """
     if frame.shape[1] != FRAME_W or frame.shape[0] != FRAME_H:
         frame = cv2.resize(frame, (FRAME_W, FRAME_H))
     vis = frame.copy()
@@ -103,27 +136,22 @@ def draw_debug(frame: np.ndarray, error: float, confidence: float) -> np.ndarray
     # ROI boundary (includes horizontal crop)
     cv2.rectangle(vis, (ROI_LEFT, ROI_TOP), (ROI_RIGHT - 1, ROI_BOTTOM - 1), (0, 255, 255), 1)
 
-    # Recompute density for visualisation
-    roi    = frame[ROI_TOP:ROI_BOTTOM, ROI_LEFT:ROI_RIGHT]
-    gray   = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-    blur   = cv2.GaussianBlur(gray, (BLUR_K, BLUR_K), 0)
-    edges  = cv2.Canny(blur, CANNY_LO, CANNY_HI)
-    density = edges.sum(axis=0).astype(float)
-    kernel  = np.ones(SMOOTH_K) / SMOOTH_K
-    smooth  = np.convolve(density, kernel, mode="same")
+    # Recompute passability for visualisation
+    score   = _passability(frame[ROI_TOP:ROI_BOTTOM, ROI_LEFT:ROI_RIGHT])
+    p_min   = score.min()
+    p_max   = score.max()
+    norm    = (score - p_min) / (p_max - p_min + 1e-6)  # shift to [0,1] for display
 
-    # Draw density bars along the bottom of the frame, offset to ROI_LEFT
-    if smooth.max() > 0:
-        bar_h    = 40
-        bar_top  = FRAME_H - bar_h
-        norm     = smooth / smooth.max()
-        for i, v in enumerate(norm):
-            x     = ROI_LEFT + i
-            bar_y = int(bar_top + bar_h * (1 - v))
-            cv2.line(vis, (x, FRAME_H - 1), (x, bar_y), (180, 180, 180), 1)
+    # Draw passability bars (taller bar = more passable = better path)
+    bar_h   = 40
+    bar_top = FRAME_H - bar_h
+    for i, v in enumerate(norm):
+        x     = ROI_LEFT + i
+        bar_y = int(bar_top + bar_h * (1 - v))
+        cv2.line(vis, (x, FRAME_H - 1), (x, bar_y), (180, 180, 180), 1)
 
     # Free-lane marker (offset back into full-frame coordinates)
-    free_col    = int(np.argmin(smooth))
+    free_col    = int(np.argmax(score))
     free_col_px = ROI_LEFT + free_col
     cv2.line(vis, (free_col_px, ROI_TOP), (free_col_px, ROI_BOTTOM - 1), (0, 255, 0), 2)
 
