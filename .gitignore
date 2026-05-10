@@ -9,6 +9,7 @@ env/
 # AI model weights (can be large)
 src/ai/models/*
 !src/ai/models/.gitkeep
+*.pt
 
 # Logs and output
 *.log
