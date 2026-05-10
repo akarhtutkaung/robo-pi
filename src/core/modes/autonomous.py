@@ -21,7 +21,7 @@ import asyncio
 import json
 from src.perception.vision.free_space import detect, MIN_CONFIDENCE
 from src.perception.camera import capture_bgr
-from src.core.config import MOTOR_CFG, AUTONOMOUS_CFG, SERVO_CFG
+from src.core.config import MOTOR_CFG, AUTONOMOUS_CFG, SERVO_CFG, OBSTACLE_AVOIDANCE_CFG
 
 AUTONOMOUS_SPEED    = AUTONOMOUS_CFG["speed"]
 REVERSE_SPEED       = AUTONOMOUS_CFG["reverse_speed"]
@@ -43,6 +43,10 @@ _DIRECTION_THRESHOLDS = [
     (0.55, ""),
     (2.0,  "HARD"),
 ]
+
+_ROBOT_WIDTH_CM    = OBSTACLE_AVOIDANCE_CFG["robot_width_cm"]
+_CLEARANCE_CM      = OBSTACLE_AVOIDANCE_CFG["clearance_buffer_cm"]
+_MIN_PASS_GAP_CM   = _ROBOT_WIDTH_CM + _CLEARANCE_CM
 
 
 def _direction_label(error: float) -> str:
@@ -67,6 +71,82 @@ async def _send(websocket, phase: str, error: float = 0.0, confidence: float = 0
         }))
     except Exception:
         pass  # client may have disconnected
+
+
+# ---------------------------------------------------------------------------
+# Task 7 — avoidance decision (pure function, no hardware)
+# ---------------------------------------------------------------------------
+
+def decide_avoidance(width_threat: str, sweep: dict) -> str:
+    """Return the avoidance maneuver to execute given threat class and sweep data.
+
+    width_threat — "WIDE" | "MEDIUM" | "NARROW"  (from classify_width_threat)
+    sweep        — {"left": cm, "center": cm, "right": cm}  (from sweep_obstacle)
+
+    Returns "TURN_LEFT" | "TURN_RIGHT" | "REVERSE_AND_TURN"
+    """
+    if width_threat == "WIDE":
+        return "REVERSE_AND_TURN"
+
+    left_cm  = sweep["left"]
+    right_cm = sweep["right"]
+    best_side = "TURN_LEFT" if left_cm >= right_cm else "TURN_RIGHT"
+    best_cm   = max(left_cm, right_cm)
+
+    if width_threat == "NARROW":
+        return best_side
+
+    # MEDIUM — only attempt to pass if the winning side has enough clearance
+    return best_side if best_cm >= _MIN_PASS_GAP_CM else "REVERSE_AND_TURN"
+
+
+# ---------------------------------------------------------------------------
+# Task 8 — avoidance maneuvers (replaces inline K-turn in navigate_step)
+# ---------------------------------------------------------------------------
+
+async def execute_avoidance(controller, camera, decision: str):
+    """Execute a steering maneuver based on the avoidance decision.
+
+    "TURN_LEFT"        — steer left → forward 0.8 s → centre
+    "TURN_RIGHT"       — steer right → forward 0.8 s → centre
+    "REVERSE_AND_TURN" — K-turn: steer → back → opposite steer → forward → centre
+    All variants end with smooth_stop() + steer_center().
+    """
+    if decision == "TURN_LEFT":
+        controller.steer(_STEER_LEFT)
+        controller.forward(AUTONOMOUS_SPEED)
+        await asyncio.sleep(0.8)
+        await controller.smooth_stop()
+        controller.steer_center()
+
+    elif decision == "TURN_RIGHT":
+        controller.steer(_STEER_RIGHT)
+        controller.forward(AUTONOMOUS_SPEED)
+        await asyncio.sleep(0.8)
+        await controller.smooth_stop()
+        controller.steer_center()
+
+    else:  # REVERSE_AND_TURN — determine turn direction from free-space error
+        error, conf = detect(capture_bgr(camera))
+        if conf >= MIN_CONFIDENCE and error > 0:
+            steer_angle, opposite_angle = _STEER_RIGHT, _STEER_LEFT
+        else:
+            steer_angle, opposite_angle = _STEER_LEFT, _STEER_RIGHT
+
+        controller.steer(steer_angle)
+        await asyncio.sleep(0.3)
+        camera.use_back()
+        controller.backward(REVERSE_SPEED)
+        await asyncio.sleep(1.5)
+        await controller.smooth_stop()
+        camera.use_front()
+        controller.steer(opposite_angle)
+        await asyncio.sleep(0.3)
+        controller.forward(AUTONOMOUS_SPEED)
+        await asyncio.sleep(1.0)
+        controller.steer_center()
+        await asyncio.sleep(0.5)
+        await controller.smooth_stop()
 
 
 async def setup(controller):
@@ -94,31 +174,11 @@ async def navigate_step(controller, obstacle, camera, websocket):
         error, conf = detect(capture_bgr(camera))
 
         if conf >= MIN_CONFIDENCE:
-            # Free space visible on one side — K-turn toward it
-            if error > 0:
-                print(f"Camera: free space right (err={error:+.2f}) — turning right")
-                steer_angle, opposite_angle = _STEER_RIGHT, _STEER_LEFT
-            else:
-                print(f"Camera: free space left (err={error:+.2f}) — turning left")
-                steer_angle, opposite_angle = _STEER_LEFT, _STEER_RIGHT
-
+            decision = "TURN_RIGHT" if error > 0 else "TURN_LEFT"
+            print(f"Camera: free space {'right' if error > 0 else 'left'} "
+                  f"(err={error:+.2f}) — {decision}")
             await _send(websocket, "avoiding", error, conf)
-
-            # K-turn: steer → back → opposite steer → forward → centre
-            controller.steer(steer_angle)
-            await asyncio.sleep(0.3)
-            camera.use_back()
-            controller.backward(REVERSE_SPEED)
-            await asyncio.sleep(1.5)
-            await controller.smooth_stop()
-            camera.use_front()
-            controller.steer(opposite_angle)
-            await asyncio.sleep(0.3)
-            controller.forward(AUTONOMOUS_SPEED)
-            await asyncio.sleep(1.0)
-            controller.steer_center()
-            await asyncio.sleep(0.5)
-            await controller.smooth_stop()
+            await execute_avoidance(controller, camera, decision)
 
         else:
             # All directions obstructed — reverse straight and reassess
