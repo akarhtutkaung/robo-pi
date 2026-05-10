@@ -4,13 +4,26 @@ Obstacle detection — two levels:
   ObstacleDetector   — ultrasonic-based proximity wrapper (always on, Thread A)
   detect_obstacles() — YOLOv8n camera-based bounding-box detection (Thread B)
 
-YOLO functions (tasks 3–6):
+YOLO functions:
   detect_obstacles(frame_bgr)                                           → list[dict]
   select_primary_obstacle(detections, frame_width)                      → dict | None
   classify_width_threat(detection, frame_width)                         → "WIDE"|"MEDIUM"|"NARROW"
   pixel_x_to_servo_angle(pixel_x, frame_width)                         → int
   sweep_obstacle(controller, ultrasonic, bbox_left_px, bbox_right_px)  → dict
   calculate_real_width(bbox_pixel_width, distance_cm, focal_length_px) → float
+
+Debug stream (SSH → browser):
+  On the Pi:
+    cd ~/robo-pi
+    python3 -m src.perception.vision.object_detection
+
+  On your Mac, open:
+    http://<pi-ip>:8080
+
+  The stream shows live YOLO bounding boxes (label + confidence) drawn on the
+  640×480 lores camera frame — the same resolution used by autonomous mode.
+  Inference time is printed per frame to stdout and overlaid on the stream.
+  Press Ctrl+C on the Pi to stop.
 """
 
 import pathlib
