@@ -5,16 +5,20 @@ Obstacle detection — two levels:
   detect_obstacles() — YOLOv8n camera-based bounding-box detection (Thread B)
 
 YOLO functions (tasks 3–6):
-  detect_obstacles(frame_bgr)                      → list[dict]
-  select_primary_obstacle(detections, frame_width) → dict | None
-  classify_width_threat(detection, frame_width)    → "WIDE" | "MEDIUM" | "NARROW"
+  detect_obstacles(frame_bgr)                                           → list[dict]
+  select_primary_obstacle(detections, frame_width)                      → dict | None
+  classify_width_threat(detection, frame_width)                         → "WIDE"|"MEDIUM"|"NARROW"
+  pixel_x_to_servo_angle(pixel_x, frame_width)                         → int
+  sweep_obstacle(controller, ultrasonic, bbox_left_px, bbox_right_px)  → dict
+  calculate_real_width(bbox_pixel_width, distance_cm, focal_length_px) → float
 """
 
 import pathlib
+import time
 import cv2
 import numpy as np
 
-from src.core.config import ULTRASONIC_CFG, OBSTACLE_AVOIDANCE_CFG
+from src.core.config import ULTRASONIC_CFG, OBSTACLE_AVOIDANCE_CFG, SERVO_CFG
 from src.hardware.sensors.ultrasonic import UltrasonicSensor
 
 # ---------------------------------------------------------------------------
@@ -191,3 +195,77 @@ def classify_width_threat(detection: dict, frame_width: int = 640) -> str:
         return "MEDIUM"
     else:
         return "NARROW"
+
+
+# ---------------------------------------------------------------------------
+# Task 5 — pixel-to-servo angle mapping
+# ---------------------------------------------------------------------------
+
+_SERVO1_CENTER = SERVO_CFG["servo1"]["center_angle"]   # 89.85°
+_SERVO1_MIN    = SERVO_CFG["servo1"]["max_angle"]      # 0°   — full right (smaller angle)
+_SERVO1_MAX    = SERVO_CFG["servo1"]["min_angle"]      # 180° — full left  (larger angle)
+_HFOV          = OBSTACLE_AVOIDANCE_CFG["camera_hfov_deg"]  # 102°
+
+
+def pixel_x_to_servo_angle(pixel_x: float, frame_width: int = 640) -> int:
+    """Map a camera frame pixel X position to a servo1 (head pan) angle in degrees.
+
+    pixel_x = 0            → full left  (_SERVO1_MAX)
+    pixel_x = frame_width/2 → centre    (_SERVO1_CENTER = 89.85°)
+    pixel_x = frame_width   → full right (_SERVO1_MIN)
+
+    The result is clamped to the servo's physical range and returned as int.
+    """
+    offset_frac = (pixel_x - frame_width / 2.0) / (frame_width / 2.0)  # [-1, 1]
+    raw_angle   = _SERVO1_CENTER - offset_frac * (_HFOV / 2.0)
+    return int(round(max(_SERVO1_MIN, min(_SERVO1_MAX, raw_angle))))
+
+
+# ---------------------------------------------------------------------------
+# Task 6 — ultrasonic sweep and physical width calculation
+# ---------------------------------------------------------------------------
+
+_SERVO_SETTLE_S = 0.10  # seconds to wait after each servo move before pinging
+
+
+def sweep_obstacle(controller, ultrasonic, bbox_left_px: int, bbox_right_px: int,
+                   frame_width: int = 640) -> dict:
+    """Rotate the head servo to three positions across the bounding box and ping.
+
+    Fires the ultrasonic at the left edge, centre, and right edge of the
+    detected bounding box. Returns distances in cm for each position.
+
+    Always restores the head to centre after the sweep regardless of errors.
+    Intended to run in a thread-pool executor (blocks for ~300–450 ms total).
+
+    Returns: {"left": float, "center": float, "right": float}
+    """
+    cx_px = (bbox_left_px + bbox_right_px) / 2.0
+    positions = {
+        "left":   bbox_left_px,
+        "center": cx_px,
+        "right":  bbox_right_px,
+    }
+    readings = {}
+    try:
+        for label, px in positions.items():
+            angle = pixel_x_to_servo_angle(px, frame_width)
+            controller.move_camera_to("x", angle)
+            time.sleep(_SERVO_SETTLE_S)
+            readings[label] = float(ultrasonic.distance_cm())
+    finally:
+        controller.center_camera()
+
+    return readings
+
+
+def calculate_real_width(bbox_pixel_width: float, distance_cm: float,
+                         focal_length_px: float) -> float:
+    """Estimate the physical width of an obstacle in centimetres.
+
+    Formula: real_width = (pixel_width × distance) / focal_length
+
+    focal_length_px is calibrated once and stored in hardware.yaml under
+    obstacle_avoidance.focal_length_px. Default estimate: 554 px.
+    """
+    return (bbox_pixel_width * distance_cm) / focal_length_px
