@@ -46,6 +46,13 @@ class ObstacleDetector:
     def should_turn(self) -> bool:
         return self.distance_cm() < TURN_CM
 
+    @property
+    def sensor(self) -> UltrasonicSensor:
+        """Public accessor for the underlying UltrasonicSensor instance.
+        Used by sweep_obstacle() in Task 9 to ping during servo sweep.
+        """
+        return self._sensor
+
     def cleanup(self):
         self._sensor.cleanup()
 
