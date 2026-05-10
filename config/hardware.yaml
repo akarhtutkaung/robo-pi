@@ -75,3 +75,10 @@ ultrasonic:
   stop_cm: 30       # Distance at which to stop
   turn_cm: 90       # Distance at which to start slowing down
   sudden_stop_cm: 20  # Distance at which to hard-stop immediately (must be < stop_cm)
+
+obstacle_avoidance:
+  robot_width_cm: 20          # Measure actual chassis width and update
+  clearance_buffer_cm: 10     # Minimum extra clearance required on each side to attempt passing
+  focal_length_px: 554        # Calibrate: place a 30cm object at 50cm, measure pixel width W,
+                               # then set to (W * 50) / 30
+  camera_hfov_deg: 102        # Pi Camera Module 3 Wide horizontal FOV
