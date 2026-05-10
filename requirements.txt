@@ -1,5 +1,13 @@
 # requirements.txt
 # Install on the Pi with: pip install -r requirements.txt
+#
+# NOTE: opencv-python and numpy are installed as system packages in setup.sh
+# (python3-opencv, python3-numpy) so they are available via --system-site-packages.
+# Do NOT pip-install opencv-python on the Pi — the system build is compiled for ARM.
+#
+# NOTE: The YOLOv8n ONNX model is not in the repo (gitignored).
+# After cloning, copy it to src/ai/models/yolov8n_320.onnx:
+#   scp yolov8n_320.onnx pi@<pi-ip>:~/robo-pi/src/ai/models/yolov8n_320.onnx
 
 # Hardware (Adafruit PCA9685 PWM controller + motor/servo abstractions)
 adafruit-circuitpython-pca9685
@@ -11,7 +19,7 @@ lgpio
 websockets
 
 # WebRTC (camera streaming)
-aiohttp==3.10.* # WebRTC (camera streaming)
+aiohttp==3.10.*
 aiortc>=1.14.0
 
 # Config file parsing

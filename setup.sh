@@ -24,7 +24,9 @@ sudo apt install -y \
     python3-libcamera \
     python3-picamera2 \
     libcamera-apps \
-    python3-lgpio
+    python3-lgpio \
+    python3-opencv \
+    python3-numpy
 
 echo "Creating virtual environment (with system packages)..."
 python3 -m venv .venv --system-site-packages
@@ -39,3 +41,7 @@ echo "Installing Python dependencies..."
 pip install -r requirements.txt
 
 echo "Setup complete ✅"
+echo ""
+echo "REMINDER: copy the YOLOv8n ONNX model to the Pi before running autonomous mode:"
+echo "  scp yolov8n_320.onnx pi@<pi-ip>:~/robo-pi/src/ai/models/yolov8n_320.onnx"
+echo "  Export on your Mac with: python3 -c \"from ultralytics import YOLO; YOLO('yolov8n.pt').export(format='onnx', imgsz=320)\""
