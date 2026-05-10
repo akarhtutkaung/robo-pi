@@ -79,10 +79,6 @@ async def _send(websocket, phase: str, error: float = 0.0, confidence: float = 0
         pass  # client may have disconnected
 
 
-# ---------------------------------------------------------------------------
-# Task 7 — avoidance decision (pure function, no hardware)
-# ---------------------------------------------------------------------------
-
 def decide_avoidance(width_threat: str, sweep: dict) -> str:
     """Return the avoidance maneuver to execute given threat class and sweep data.
 
@@ -104,11 +100,6 @@ def decide_avoidance(width_threat: str, sweep: dict) -> str:
 
     # MEDIUM — only attempt to pass if the winning side has enough clearance
     return best_side if best_cm >= _MIN_PASS_GAP_CM else "REVERSE_AND_TURN"
-
-
-# ---------------------------------------------------------------------------
-# Task 8 — avoidance maneuvers (replaces inline K-turn in navigate_step)
-# ---------------------------------------------------------------------------
 
 async def execute_avoidance(controller, camera, decision: str):
     """Execute a steering maneuver based on the avoidance decision.

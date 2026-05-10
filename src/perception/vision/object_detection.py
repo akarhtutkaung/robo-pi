@@ -36,7 +36,7 @@ from src.core.config import ULTRASONIC_CFG, OBSTACLE_AVOIDANCE_CFG, SERVO_CFG
 from src.hardware.sensors.ultrasonic import UltrasonicSensor
 
 # ---------------------------------------------------------------------------
-# ObstacleDetector — ultrasonic proximity (unchanged, used by Thread A)
+# ObstacleDetector — ultrasonic proximity (used by Thread A)
 # ---------------------------------------------------------------------------
 
 STOP_CM        = ULTRASONIC_CFG["stop_cm"]
@@ -181,7 +181,7 @@ def detect_obstacles(frame_bgr: np.ndarray) -> list:
 
 
 # ---------------------------------------------------------------------------
-# Task 4 — priority selection and threat classification
+# priority selection and threat classification
 # ---------------------------------------------------------------------------
 
 def select_primary_obstacle(detections: list, frame_width: int = 640):
@@ -219,7 +219,7 @@ def classify_width_threat(detection: dict, frame_width: int = 640) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Task 5 — pixel-to-servo angle mapping
+# pixel-to-servo angle mapping
 # ---------------------------------------------------------------------------
 
 _SERVO1_CENTER   = SERVO_CFG["servo1"]["center_angle"]        # 89.85°
@@ -246,7 +246,7 @@ def pixel_x_to_servo_angle(pixel_x: float, frame_width: int = 640) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Task 6 — ultrasonic sweep and physical width calculation
+# ultrasonic sweep and physical width calculation
 # ---------------------------------------------------------------------------
 
 _SERVO_SETTLE_S = 0.10  # seconds to wait after each servo move before pinging
