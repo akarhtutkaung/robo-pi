@@ -399,5 +399,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\nStopped.")
     finally:
-        server.shutdown()
-        cam.stop()
+        cam.stop()  # server thread is daemon — exits with the main thread
