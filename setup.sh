@@ -40,8 +40,13 @@ pip install --upgrade pip
 echo "Installing Python dependencies..."
 pip install -r requirements.txt
 
+echo "Creating model directory..."
+mkdir -p src/ai/models
+
 echo "Setup complete ✅"
 echo ""
-echo "REMINDER: copy the YOLOv8n ONNX model to the Pi before running autonomous mode:"
-echo "  scp yolov8n_320.onnx pi@<pi-ip>:~/robo-pi/src/ai/models/yolov8n_320.onnx"
-echo "  Export on your Mac with: python3 -c \"from ultralytics import YOLO; YOLO('yolov8n.pt').export(format='onnx', imgsz=320)\""
+echo "Next step — copy the YOLOv8n ONNX model to the Pi (required for autonomous mode):"
+echo "  On your Mac:"
+echo "    pip install ultralytics onnx"
+echo "    python3 -c \"from ultralytics import YOLO; YOLO('yolov8n.pt').export(format='onnx', imgsz=320)\""
+echo "    scp yolov8n.onnx pi@<pi-ip>:~/robo-pi/src/ai/models/yolov8n_320.onnx"

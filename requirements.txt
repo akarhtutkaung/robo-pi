@@ -1,13 +1,12 @@
-# requirements.txt
+# requirements.txt — Raspberry Pi runtime dependencies
 # Install on the Pi with: pip install -r requirements.txt
 #
-# NOTE: opencv-python and numpy are installed as system packages in setup.sh
-# (python3-opencv, python3-numpy) so they are available via --system-site-packages.
-# Do NOT pip-install opencv-python on the Pi — the system build is compiled for ARM.
-#
-# NOTE: The YOLOv8n ONNX model is not in the repo (gitignored).
-# After cloning, copy it to src/ai/models/yolov8n_320.onnx:
-#   scp yolov8n_320.onnx pi@<pi-ip>:~/robo-pi/src/ai/models/yolov8n_320.onnx
+# System packages (installed via apt in setup.sh — do NOT pip-install these):
+#   python3-opencv  — cv2 + cv2.dnn for YOLO inference (ARM-compiled, faster than pip wheel)
+#   python3-numpy   — array operations
+#   python3-picamera2, python3-lgpio — camera and GPIO
+
+# ── Pi runtime ──────────────────────────────────────────────────────────────
 
 # Hardware (Adafruit PCA9685 PWM controller + motor/servo abstractions)
 adafruit-circuitpython-pca9685
@@ -24,3 +23,13 @@ aiortc>=1.14.0
 
 # Config file parsing
 pyyaml
+
+# ── Development / model export (Mac only, not needed on Pi) ─────────────────
+#
+# Export yolov8n to ONNX once on your Mac, then scp the result to the Pi:
+#
+#   pip install ultralytics onnx
+#   python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt').export(format='onnx', imgsz=320)"
+#   scp yolov8n.onnx pi@<pi-ip>:~/robo-pi/src/ai/models/yolov8n_320.onnx
+#
+# The model file is gitignored (src/ai/models/*). setup.sh creates the directory.
