@@ -20,8 +20,14 @@ drive_state message format:
 import asyncio
 import json
 from src.perception.vision.free_space import detect, MIN_CONFIDENCE
+from src.perception.vision.object_detection import (
+    detect_obstacles, select_primary_obstacle, classify_width_threat,
+    sweep_obstacle, calculate_real_width,
+)
 from src.perception.camera import capture_bgr
 from src.core.config import MOTOR_CFG, AUTONOMOUS_CFG, SERVO_CFG, OBSTACLE_AVOIDANCE_CFG
+
+_FOCAL_LENGTH_PX = OBSTACLE_AVOIDANCE_CFG["focal_length_px"]
 
 AUTONOMOUS_SPEED    = AUTONOMOUS_CFG["speed"]
 REVERSE_SPEED       = AUTONOMOUS_CFG["reverse_speed"]
@@ -171,25 +177,49 @@ async def navigate_step(controller, obstacle, camera, websocket):
             print(f"Obstacle at {distance:.1f} cm — smooth stop (rate={required_rate}).")
             await controller.smooth_stop(rate=required_rate)
 
-        error, conf = detect(capture_bgr(camera))
+        # --- Layer 2: YOLO detection (runs before servo moves) ---
+        detections = detect_obstacles(capture_bgr(camera))
 
-        if conf >= MIN_CONFIDENCE:
-            decision = "TURN_RIGHT" if error > 0 else "TURN_LEFT"
-            print(f"Camera: free space {'right' if error > 0 else 'left'} "
-                  f"(err={error:+.2f}) — {decision}")
-            await _send(websocket, "avoiding", error, conf)
+        if detections:
+            primary  = select_primary_obstacle(detections, frame_width=640)
+            threat   = classify_width_threat(primary, frame_width=640)
+
+            # --- Layer 3: servo sweep (blocking — run in thread pool) ---
+            loop  = asyncio.get_running_loop()
+            sweep = await loop.run_in_executor(
+                None, sweep_obstacle, controller, obstacle.sensor,
+                primary["x1"], primary["x2"],
+            )
+            width_cm = calculate_real_width(
+                primary["x2"] - primary["x1"], sweep["center"], _FOCAL_LENGTH_PX
+            )
+            decision = decide_avoidance(threat, sweep)
+            print(f"YOLO: {threat} obstacle ~{width_cm:.1f} cm wide, "
+                  f"{sweep['center']:.1f} cm away → {decision}")
+            await _send(websocket, "avoiding", 0.0, 1.0)
             await execute_avoidance(controller, camera, decision)
 
         else:
-            # All directions obstructed — reverse straight and reassess
-            print(f"Camera: all directions blocked (conf={conf:.2f}) — reversing straight.")
-            await _send(websocket, "blocked", 0.0, conf)
-            controller.steer_center()
-            camera.use_back()
-            controller.backward(REVERSE_SPEED)
-            await asyncio.sleep(2.0)
-            await controller.smooth_stop()
-            camera.use_front()
+            # No YOLO detection — fall back to free-space steering
+            error, conf = detect(capture_bgr(camera))
+
+            if conf >= MIN_CONFIDENCE:
+                decision = "TURN_RIGHT" if error > 0 else "TURN_LEFT"
+                print(f"free_space: {'right' if error > 0 else 'left'} "
+                      f"(err={error:+.2f}) — {decision}")
+                await _send(websocket, "avoiding", error, conf)
+                await execute_avoidance(controller, camera, decision)
+
+            else:
+                # All directions obstructed — reverse straight and reassess
+                print(f"free_space: blocked (conf={conf:.2f}) — reversing straight.")
+                await _send(websocket, "blocked", 0.0, conf)
+                controller.steer_center()
+                camera.use_back()
+                controller.backward(REVERSE_SPEED)
+                await asyncio.sleep(2.0)
+                await controller.smooth_stop()
+                camera.use_front()
 
     elif obstacle.should_turn():
         await _send(websocket, "approaching", 0.0, 0.0)
