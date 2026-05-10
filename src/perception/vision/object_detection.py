@@ -276,3 +276,111 @@ def calculate_real_width(bbox_pixel_width: float, distance_cm: float,
     obstacle_avoidance.focal_length_px. Default estimate: 554 px.
     """
     return (bbox_pixel_width * distance_cm) / focal_length_px
+
+
+# ---------------------------------------------------------------------------
+# Offline / SSH debug — MJPEG stream with YOLO bounding boxes
+#
+#   python3 -m src.perception.vision.object_detection
+#   Then open http://<pi-ip>:8080 in a browser on your Mac.
+# ---------------------------------------------------------------------------
+
+# Subset of COCO class names for display; everything else shown as cls<id>.
+_COCO_LABELS = {
+    0: "person",    1: "bicycle",   2: "car",       3: "motorbike",
+    4: "aeroplane", 5: "bus",       6: "train",     7: "truck",
+    14: "bird",     15: "cat",      16: "dog",
+    56: "chair",    57: "couch",    58: "plant",    59: "bed",
+    60: "table",    62: "tv",       63: "laptop",   67: "phone",
+    72: "fridge",   73: "book",     74: "clock",    76: "scissors",
+}
+
+if __name__ == "__main__":
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    from src.perception.camera import make_camera, capture_bgr  # type: ignore
+    from src.core.config import CAMERA_CFG                      # type: ignore
+
+    _PORT   = 8080
+    _shared: dict = {"jpg": None}
+    _lock   = threading.Lock()
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type",
+                             "multipart/x-mixed-replace; boundary=frame")
+            self.end_headers()
+            try:
+                while True:
+                    with _lock:
+                        jpg = _shared["jpg"]
+                    if jpg is None:
+                        time.sleep(0.05)
+                        continue
+                    self.wfile.write(
+                        b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
+                        + jpg + b"\r\n"
+                    )
+                    time.sleep(0.05)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        def log_message(self, *_):
+            pass
+
+    fc  = CAMERA_CFG["front"]
+    cam = make_camera(
+        fc["index"],
+        fc["main_width"], fc["main_height"],
+        fc["lores_width"], fc["lores_height"],
+        fc["framerate"],
+        fc.get("rotate_180", False),
+    )
+
+    server = HTTPServer(("0.0.0.0", _PORT), _Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    print(f"YOLO stream — open http://<pi-ip>:{_PORT} in your browser.")
+    print("Ctrl+C to stop.\n")
+
+    try:
+        while True:
+            t0         = time.perf_counter()
+            frame      = capture_bgr(cam)
+            detections = detect_obstacles(frame)
+            ms         = (time.perf_counter() - t0) * 1000
+
+            vis = frame.copy()
+            for d in detections:
+                label = _COCO_LABELS.get(d["class_id"], f"cls{d['class_id']}")
+                x1, y1, x2, y2 = d["x1"], d["y1"], d["x2"], d["y2"]
+                cv2.rectangle(vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.putText(vis, f"{label} {d['conf']:.2f}",
+                            (x1, max(y1 - 6, 10)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1,
+                            cv2.LINE_AA)
+
+            cv2.putText(vis, f"{len(detections)} det  {ms:.0f} ms",
+                        (6, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                        (0, 200, 255), 1, cv2.LINE_AA)
+
+            _, jpg = cv2.imencode(".jpg", vis, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            with _lock:
+                _shared["jpg"] = jpg.tobytes()
+
+            if detections:
+                names = ", ".join(
+                    f"{_COCO_LABELS.get(d['class_id'], d['class_id'])} "
+                    f"{d['conf']:.2f}"
+                    for d in detections
+                )
+                print(f"[{ms:5.0f} ms]  {len(detections)} det: {names}")
+            else:
+                print(f"[{ms:5.0f} ms]  —")
+
+    except KeyboardInterrupt:
+        print("\nStopped.")
+    finally:
+        server.shutdown()
+        cam.stop()
