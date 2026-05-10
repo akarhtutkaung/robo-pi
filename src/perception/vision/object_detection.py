@@ -26,6 +26,7 @@ Debug stream (SSH → browser):
   Press Ctrl+C on the Pi to stop.
 """
 
+import math
 import pathlib
 import time
 import cv2
@@ -221,23 +222,26 @@ def classify_width_threat(detection: dict, frame_width: int = 640) -> str:
 # Task 5 — pixel-to-servo angle mapping
 # ---------------------------------------------------------------------------
 
-_SERVO1_CENTER = SERVO_CFG["servo1"]["center_angle"]   # 89.85°
-_SERVO1_MIN    = SERVO_CFG["servo1"]["max_angle"]      # 0°   — full right (smaller angle)
-_SERVO1_MAX    = SERVO_CFG["servo1"]["min_angle"]      # 180° — full left  (larger angle)
-_HFOV          = OBSTACLE_AVOIDANCE_CFG["camera_hfov_deg"]  # 102°
+_SERVO1_CENTER   = SERVO_CFG["servo1"]["center_angle"]        # 89.85°
+_SERVO1_MIN      = SERVO_CFG["servo1"]["max_angle"]           # 0°   — full right (smaller angle)
+_SERVO1_MAX      = SERVO_CFG["servo1"]["min_angle"]           # 180° — full left  (larger angle)
+_FOCAL_LENGTH_PX = OBSTACLE_AVOIDANCE_CFG["focal_length_px"]  # 259 px (geometric; calibrate on device)
 
 
 def pixel_x_to_servo_angle(pixel_x: float, frame_width: int = 640) -> int:
     """Map a camera frame pixel X position to a servo1 (head pan) angle in degrees.
 
-    pixel_x = 0            → full left  (_SERVO1_MAX)
-    pixel_x = frame_width/2 → centre    (_SERVO1_CENTER = 89.85°)
-    pixel_x = frame_width   → full right (_SERVO1_MIN)
+    pixel_x = 0              → full left  (≈ _SERVO1_MAX)
+    pixel_x = frame_width/2  → centre     (_SERVO1_CENTER = 89.85°)
+    pixel_x = frame_width    → full right (≈ _SERVO1_MIN)
 
-    The result is clamped to the servo's physical range and returned as int.
+    Uses the pinhole/atan model rather than a linear approximation so that
+    the mapping stays accurate across the full 102° horizontal FOV of the
+    Pi Camera V3 Wide Angle. Result is clamped to the servo's physical range.
     """
-    offset_frac = (pixel_x - frame_width / 2.0) / (frame_width / 2.0)  # [-1, 1]
-    raw_angle   = _SERVO1_CENTER - offset_frac * (_HFOV / 2.0)
+    offset_px = pixel_x - frame_width / 2.0
+    angle_deg = math.degrees(math.atan2(offset_px, _FOCAL_LENGTH_PX))
+    raw_angle = _SERVO1_CENTER - angle_deg
     return int(round(max(_SERVO1_MIN, min(_SERVO1_MAX, raw_angle))))
 
 
