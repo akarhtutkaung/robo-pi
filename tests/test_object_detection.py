@@ -4,6 +4,7 @@ Tests for src/perception/vision/object_detection.py
 Hardware-free: UltrasonicSensor is never instantiated.
 sweep_obstacle tests use FakeController / FakeSensor.
 """
+import cv2
 import numpy as np
 import pytest
 
@@ -14,6 +15,7 @@ from src.perception.vision.object_detection import (
     pixel_x_to_servo_angle,
     calculate_real_width,
     sweep_obstacle,
+    _COCO_LABELS,
 )
 from src.core.config import SERVO_CFG
 
@@ -218,3 +220,134 @@ def test_sweep_centres_even_on_sensor_error():
         sweep_obstacle(ctrl, _BrokenSensor(), 100, 300)
 
     assert ctrl.centred, "center_camera() was not called when sensor raised"
+
+
+# ---------------------------------------------------------------------------
+# _COCO_LABELS — stream annotation label table
+# ---------------------------------------------------------------------------
+
+def test_coco_labels_person():
+    assert _COCO_LABELS[0] == "person"
+
+
+def test_coco_labels_vehicle_classes():
+    assert _COCO_LABELS[1] == "bicycle"
+    assert _COCO_LABELS[2] == "car"
+    assert _COCO_LABELS[5] == "bus"
+    assert _COCO_LABELS[7] == "truck"
+
+
+def test_coco_labels_animal_classes():
+    assert _COCO_LABELS[14] == "bird"
+    assert _COCO_LABELS[15] == "cat"
+    assert _COCO_LABELS[16] == "dog"
+
+
+def test_coco_labels_furniture_classes():
+    assert _COCO_LABELS[56] == "chair"
+    assert _COCO_LABELS[57] == "couch"
+    assert _COCO_LABELS[59] == "bed"
+
+
+def test_coco_labels_unknown_id_falls_back():
+    unknown_id = 999
+    assert unknown_id not in _COCO_LABELS
+    label = _COCO_LABELS.get(unknown_id, f"cls{unknown_id}")
+    assert label == "cls999"
+
+
+def test_coco_labels_all_values_are_strings():
+    assert all(isinstance(v, str) for v in _COCO_LABELS.values())
+
+
+def test_coco_labels_all_keys_are_ints():
+    assert all(isinstance(k, int) for k in _COCO_LABELS)
+
+
+# ---------------------------------------------------------------------------
+# Stream annotation rendering
+#
+# The draw loop inside __main__ is not importable as a function, so these
+# tests replicate its logic directly. They verify that:
+#   - cv2.rectangle and cv2.putText run without error on a real frame
+#   - bounding box pixels are modified (green channel set)
+#   - the original frame is not mutated (vis = frame.copy())
+#   - empty detections leave the frame pixel-identical to the source
+# ---------------------------------------------------------------------------
+
+def _annotate(frame: np.ndarray, detections: list) -> np.ndarray:
+    """Replicate the stream draw loop from object_detection.__main__."""
+    vis = frame.copy()
+    for d in detections:
+        label = _COCO_LABELS.get(d["class_id"], f"cls{d['class_id']}")
+        x1, y1, x2, y2 = d["x1"], d["y1"], d["x2"], d["y2"]
+        cv2.rectangle(vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        cv2.putText(vis, f"{label} {d['conf']:.2f}",
+                    (x1, max(y1 - 6, 10)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1,
+                    cv2.LINE_AA)
+    return vis
+
+
+def _blank640() -> np.ndarray:
+    return np.zeros((480, 640, 3), dtype=np.uint8)
+
+
+def _fake_detection(x1=100, y1=50, x2=300, y2=250, conf=0.85, class_id=0) -> dict:
+    return {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "conf": conf, "class_id": class_id}
+
+
+def test_annotate_does_not_mutate_original():
+    frame = _blank640()
+    original = frame.copy()
+    _annotate(frame, [_fake_detection()])
+    assert np.array_equal(frame, original), "annotate() must not modify the source frame"
+
+
+def test_annotate_empty_detections_unchanged():
+    frame = _blank640()
+    vis   = _annotate(frame, [])
+    assert np.array_equal(vis, frame)
+
+
+def test_annotate_draws_green_rectangle():
+    """At least one pixel along the bounding box edge must be green (G=255, R=0, B=0)."""
+    vis = _annotate(_blank640(), [_fake_detection(x1=100, y1=50, x2=300, y2=250)])
+    # Sample the top edge of the bounding box (row y1=50, cols 100..300)
+    top_edge = vis[50, 100:300]
+    green_pixels = np.all(top_edge == [0, 255, 0], axis=1)
+    assert green_pixels.any(), "No green rectangle pixels found on the bounding box edge"
+
+
+def test_annotate_known_class_label_in_image():
+    """Verify label text is rendered without raising (cv2.putText succeeds)."""
+    det = _fake_detection(class_id=0, y1=30)  # person; y1=30 so text fits above
+    vis = _annotate(_blank640(), [det])
+    assert vis.shape == (480, 640, 3)
+
+
+def test_annotate_unknown_class_label_in_image():
+    """cls<id> fallback label must not raise."""
+    det = _fake_detection(class_id=999)
+    vis = _annotate(_blank640(), [det])
+    assert vis.shape == (480, 640, 3)
+
+
+def test_annotate_jpeg_encode_succeeds():
+    """Annotated frame must encode to JPEG without error."""
+    vis = _annotate(_blank640(), [_fake_detection()])
+    ok, jpg = cv2.imencode(".jpg", vis, [cv2.IMWRITE_JPEG_QUALITY, 80])
+    assert ok
+    assert len(jpg.tobytes()) > 0
+
+
+def test_annotate_multiple_detections():
+    dets = [
+        _fake_detection(x1=10,  y1=10,  x2=100, y2=100, class_id=0,  conf=0.90),
+        _fake_detection(x1=200, y1=100, x2=400, y2=300, class_id=2,  conf=0.75),
+        _fake_detection(x1=500, y1=200, x2=620, y2=400, class_id=56, conf=0.60),
+    ]
+    vis = _annotate(_blank640(), dets)
+    assert vis.shape == (480, 640, 3)
+    # Frame must have been modified
+    assert not np.array_equal(vis, _blank640())
