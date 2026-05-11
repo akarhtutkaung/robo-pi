@@ -296,10 +296,7 @@ def calculate_real_width(bbox_pixel_width: float, distance_cm: float,
 
 
 # ---------------------------------------------------------------------------
-# Offline / SSH debug — MJPEG stream with YOLO bounding boxes
-#
-#   python3 -m src.perception.vision.object_detection
-#   Then open http://<pi-ip>:8080 in a browser on your Mac.
+# Annotation helper — used by the debug stream server and __main__
 # ---------------------------------------------------------------------------
 
 # Subset of COCO class names for display; everything else shown as cls<id>.
@@ -311,6 +308,30 @@ _COCO_LABELS = {
     60: "table",    62: "tv",       63: "laptop",   67: "phone",
     72: "fridge",   73: "book",     74: "clock",    76: "scissors",
 }
+
+
+def draw_detections(vis: np.ndarray, detections: list) -> np.ndarray:
+    """Draw YOLO bounding boxes and labels onto vis (modifies in-place, returns vis).
+
+    Intended to be called after draw_debug() from free_space so both overlays
+    appear on the same frame.
+    """
+    for d in detections:
+        label = _COCO_LABELS.get(d["class_id"], f"cls{d['class_id']}")
+        x1, y1, x2, y2 = d["x1"], d["y1"], d["x2"], d["y2"]
+        cv2.rectangle(vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        cv2.putText(vis, f"{label} {d['conf']:.2f}",
+                    (x1, max(y1 - 6, 10)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1, cv2.LINE_AA)
+    return vis
+
+
+# ---------------------------------------------------------------------------
+# Offline / SSH debug — MJPEG stream with YOLO bounding boxes
+#
+#   python3 -m src.perception.vision.object_detection
+#   Then open http://<pi-ip>:8080 in a browser on your Mac.
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     import threading
@@ -368,16 +389,7 @@ if __name__ == "__main__":
             detections = detect_obstacles(frame)
             ms         = (time.perf_counter() - t0) * 1000
 
-            vis = frame.copy()
-            for d in detections:
-                label = _COCO_LABELS.get(d["class_id"], f"cls{d['class_id']}")
-                x1, y1, x2, y2 = d["x1"], d["y1"], d["x2"], d["y2"]
-                cv2.rectangle(vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.putText(vis, f"{label} {d['conf']:.2f}",
-                            (x1, max(y1 - 6, 10)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1,
-                            cv2.LINE_AA)
-
+            vis = draw_detections(frame.copy(), detections)
             cv2.putText(vis, f"{len(detections)} det  {ms:.0f} ms",
                         (6, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
                         (0, 200, 255), 1, cv2.LINE_AA)

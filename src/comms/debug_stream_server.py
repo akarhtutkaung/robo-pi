@@ -1,6 +1,10 @@
 """
-MJPEG debug stream server — streams the free-space detection overlay while
-the robot is running. Open http://<pi-ip>:8080 in a browser.
+MJPEG debug stream server — streams a combined free-space + YOLO overlay
+while the robot is running. Open http://<pi-ip>:8080 in a browser.
+
+Overlay (bottom to top, drawn in order):
+  1. Free-space passability bars and ROI box   (draw_debug)
+  2. YOLO bounding boxes with label/confidence (draw_detections)
 
 Shares the existing CameraSwitch with the main system — no second camera
 instance is created. Frame capture and processing runs in a thread-pool
@@ -17,6 +21,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from src.perception.camera import capture_bgr
 from src.perception.vision.free_space import detect, draw_debug
+from src.perception.vision.object_detection import detect_obstacles, draw_detections
 
 _JPEG_QUALITY = 75
 
@@ -24,7 +29,9 @@ _JPEG_QUALITY = 75
 def _capture_and_encode(camera) -> bytes:
     frame       = capture_bgr(camera)
     error, conf = detect(frame)
-    vis         = draw_debug(frame, error, conf)
+    vis         = draw_debug(frame, error, conf)   # free-space overlay (returns copy)
+    detections  = detect_obstacles(frame)
+    draw_detections(vis, detections)               # YOLO boxes on top (in-place)
     _, jpg      = cv2.imencode(".jpg", vis, [cv2.IMWRITE_JPEG_QUALITY, _JPEG_QUALITY])
     return jpg.tobytes()
 

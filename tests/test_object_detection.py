@@ -15,6 +15,7 @@ from src.perception.vision.object_detection import (
     pixel_x_to_servo_angle,
     calculate_real_width,
     sweep_obstacle,
+    draw_detections,
     _COCO_LABELS,
 )
 from src.core.config import SERVO_CFG
@@ -276,17 +277,7 @@ def test_coco_labels_all_keys_are_ints():
 # ---------------------------------------------------------------------------
 
 def _annotate(frame: np.ndarray, detections: list) -> np.ndarray:
-    """Replicate the stream draw loop from object_detection.__main__."""
-    vis = frame.copy()
-    for d in detections:
-        label = _COCO_LABELS.get(d["class_id"], f"cls{d['class_id']}")
-        x1, y1, x2, y2 = d["x1"], d["y1"], d["x2"], d["y2"]
-        cv2.rectangle(vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        cv2.putText(vis, f"{label} {d['conf']:.2f}",
-                    (x1, max(y1 - 6, 10)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1,
-                    cv2.LINE_AA)
-    return vis
+    return draw_detections(frame.copy(), detections)
 
 
 def _blank640() -> np.ndarray:
