@@ -6,3 +6,10 @@ autonomous:
   speed: 6          # forward cruising speed
   reverse_speed: 4  # reverse speed during avoidance maneuvers
   approach_speed: 3 # speed when slowing down in the braking zone
+
+  # execute_avoidance timing — tune alongside speed values
+  turn_drive_s: 0.8          # forward duration for TURN_LEFT / TURN_RIGHT
+  kturn_steer_settle_s: 0.3  # pause after each steer command in K-turn
+  kturn_reverse_s: 1.5       # reverse duration in K-turn
+  kturn_forward_s: 1.0       # forward duration in K-turn
+  kturn_final_settle_s: 0.5  # settle pause before final smooth_stop

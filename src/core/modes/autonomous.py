@@ -21,6 +21,8 @@ import asyncio
 import json
 import logging
 
+from websockets.exceptions import ConnectionClosed
+
 from src.perception.vision.free_space import detect, MIN_CONFIDENCE
 from src.perception.vision.object_detection import (
     detect_obstacles, select_primary_obstacle, classify_width_threat,
@@ -37,6 +39,13 @@ AUTONOMOUS_SPEED    = AUTONOMOUS_CFG["speed"]
 REVERSE_SPEED       = AUTONOMOUS_CFG["reverse_speed"]
 APPROACH_SPEED      = AUTONOMOUS_CFG["approach_speed"]
 _CM_PER_SPEED_UNIT  = MOTOR_CFG["rear"]["cm_per_speed_unit"]
+
+# execute_avoidance timing — sourced from modes.yaml so they stay in sync with speed
+_TURN_DRIVE_S         = AUTONOMOUS_CFG["turn_drive_s"]
+_KTURN_STEER_SETTLE_S = AUTONOMOUS_CFG["kturn_steer_settle_s"]
+_KTURN_REVERSE_S      = AUTONOMOUS_CFG["kturn_reverse_s"]
+_KTURN_FORWARD_S      = AUTONOMOUS_CFG["kturn_forward_s"]
+_KTURN_FINAL_SETTLE_S = AUTONOMOUS_CFG["kturn_final_settle_s"]
 _STOP_TARGET_MARGIN = 5.0   # cm — target stop distance in front of obstacle
 _MIN_DECEL_DIST_CM  = 1.0   # lower bound on d_target; prevents ÷0 in decel formula
 
@@ -76,7 +85,8 @@ def _direction_label(error: float) -> str:
                 return "CENTER"
             side = "LEFT" if error < 0 else "RIGHT"
             return f"{prefix} {side}".strip() if prefix else side
-    return "LEFT" if error < 0 else "RIGHT"
+    # a >= 2.0: unreachable for error in [-1, 1] but saturates to HARD
+    return "HARD LEFT" if error < 0 else "HARD RIGHT"
 
 
 def decide_avoidance(width_threat: str, sweep: dict) -> str:
@@ -90,8 +100,12 @@ def decide_avoidance(width_threat: str, sweep: dict) -> str:
     if width_threat == "WIDE":
         return "REVERSE_AND_TURN"
 
-    left_cm   = sweep["left"]
-    right_cm  = sweep["right"]
+    left_cm  = sweep.get("left",  0.0)
+    right_cm = sweep.get("right", 0.0)
+    if left_cm == 0.0 and right_cm == 0.0:
+        log.warning("decide_avoidance: sweep returned zero on both sides — reversing.")
+        return "REVERSE_AND_TURN"
+
     best_side = "TURN_LEFT" if left_cm >= right_cm else "TURN_RIGHT"
     best_cm   = max(left_cm, right_cm)
 
@@ -115,8 +129,10 @@ async def _send(websocket, phase: str, error: float = 0.0, confidence: float = 0
             "error":      round(error, 3),
             "confidence": round(confidence, 2),
         }))
+    except (ConnectionClosed, OSError):
+        pass  # client disconnected — not an error
     except Exception:
-        pass  # client may have disconnected
+        log.exception("Unexpected error sending drive_state")
 
 
 # ---------------------------------------------------------------------------
@@ -134,14 +150,14 @@ async def execute_avoidance(controller, camera, decision: str):
     if decision == "TURN_LEFT":
         controller.steer(_STEER_LEFT)
         controller.forward(AUTONOMOUS_SPEED)
-        await asyncio.sleep(0.8)
+        await asyncio.sleep(_TURN_DRIVE_S)
         await controller.smooth_stop()
         controller.steer_center()
 
     elif decision == "TURN_RIGHT":
         controller.steer(_STEER_RIGHT)
         controller.forward(AUTONOMOUS_SPEED)
-        await asyncio.sleep(0.8)
+        await asyncio.sleep(_TURN_DRIVE_S)
         await controller.smooth_stop()
         controller.steer_center()
 
@@ -160,17 +176,17 @@ async def execute_avoidance(controller, camera, decision: str):
             steer_angle, opposite_angle = _STEER_LEFT, _STEER_RIGHT
 
         controller.steer(steer_angle)
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(_KTURN_STEER_SETTLE_S)
         async with camera.reverse_cam():
             controller.backward(REVERSE_SPEED)
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(_KTURN_REVERSE_S)
             await controller.smooth_stop()
         controller.steer(opposite_angle)
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(_KTURN_STEER_SETTLE_S)
         controller.forward(AUTONOMOUS_SPEED)
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(_KTURN_FORWARD_S)
         controller.steer_center()
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(_KTURN_FINAL_SETTLE_S)
         await controller.smooth_stop()
 
 
@@ -179,6 +195,8 @@ async def execute_avoidance(controller, camera, decision: str):
 # ---------------------------------------------------------------------------
 
 async def _handle_approaching(controller, websocket):
+    # controller.forward() starts the internal ramp loop (accelerate_rate in hardware.yaml)
+    # so APPROACH_SPEED is reached gradually — no lurch on entry to this phase.
     await _send(websocket, "approaching", 0.0, 0.0)
     controller.forward(APPROACH_SPEED)
 
@@ -246,7 +264,8 @@ async def _handle_blocked(controller, obstacle, camera, websocket):
         log.info("Obstacle at %.1f cm — smooth stop (rate=%s).", distance, required_rate)
         await controller.smooth_stop(rate=required_rate)
 
-    # Layer 2: YOLO detection
+    # Layer 2: YOLO detection — frame captured after smooth_stop() completes,
+    # so bounding box positions match the robot's actual stopped position.
     try:
         frame      = await loop.run_in_executor(None, capture_bgr, camera)
         detections = await loop.run_in_executor(None, detect_obstacles, frame)
@@ -298,13 +317,31 @@ async def navigate_step(controller, obstacle, camera, websocket):
         await _handle_clear(controller, camera, websocket)
 
 
+_MAX_CONSECUTIVE_ERRORS = 5
+
+
 async def run_autonomous(controller, obstacle, camera, websocket):
     await setup(controller)
     loop = asyncio.get_running_loop()
+    consecutive_errors = 0
     try:
         while True:
             deadline = loop.time() + _LOOP_PERIOD
-            await navigate_step(controller, obstacle, camera, websocket)
+            try:
+                await navigate_step(controller, obstacle, camera, websocket)
+                consecutive_errors = 0
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("navigate_step failed.")
+                consecutive_errors += 1
+                if consecutive_errors >= _MAX_CONSECUTIVE_ERRORS:
+                    log.critical(
+                        "Too many consecutive navigation failures (%d) — forcing stop.",
+                        consecutive_errors,
+                    )
+                    controller.force_stop()
+                    raise
             remaining = deadline - loop.time()
             if remaining > 0:
                 await asyncio.sleep(remaining)
