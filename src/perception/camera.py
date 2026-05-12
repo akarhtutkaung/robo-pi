@@ -14,6 +14,7 @@ devices are acquired once and shared across WebRTC streaming and autonomous visi
 Dependencies: aiortc, av, picamera2, opencv-python
 """
 
+import contextlib
 import cv2
 import numpy as np
 from aiortc import VideoStreamTrack
@@ -57,6 +58,19 @@ class CameraSwitch:
 
     def use_back(self):
         self._active = self._back
+
+    @contextlib.asynccontextmanager
+    async def reverse_cam(self):
+        """Switch to the back camera for the block's duration, then restore front.
+
+        Guarantees use_front() is called even if the body raises, so the rover
+        never gets stuck with the rear camera active after an exception.
+        """
+        self.use_back()
+        try:
+            yield
+        finally:
+            self.use_front()
 
     def capture_array(self, name: str = "main") -> np.ndarray:
         return self._active.capture_array(name)

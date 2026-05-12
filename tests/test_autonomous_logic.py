@@ -6,6 +6,7 @@ navigate_step() pipeline with all hardware mocked at the module level.
 No Pi hardware is touched.
 """
 import asyncio
+import contextlib
 import json
 import numpy as np
 import pytest
@@ -60,6 +61,14 @@ class _Controller:
 class _Camera:
     def use_back(self):  pass
     def use_front(self): pass
+
+    @contextlib.asynccontextmanager
+    async def reverse_cam(self):
+        self.use_back()
+        try:
+            yield
+        finally:
+            self.use_front()
 
 
 class _WS:
