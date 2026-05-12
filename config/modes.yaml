@@ -13,3 +13,7 @@ autonomous:
   kturn_reverse_s: 1.5       # reverse duration in K-turn
   kturn_forward_s: 1.0       # forward duration in K-turn
   kturn_final_settle_s: 0.5  # settle pause before final smooth_stop
+
+  # Clear-phase lateral sweep
+  sweep_angle_deg: 20  # degrees either side of centre for background sweep
+  warn_cm: 60          # slow to approach_speed if YOLO+ultrasonic confirm obstacle within this range

@@ -20,6 +20,10 @@ from src.core.modes.autonomous import (
     APPROACH_SPEED,
     _STEER_LEFT,
     _STEER_RIGHT,
+    _SweepCache,
+    _STOP_CM,
+    _WARN_CM,
+    _SWEEP_POSITIONS,
 )
 
 
@@ -31,13 +35,22 @@ def _blank_frame() -> np.ndarray:
     return np.zeros((480, 640, 3), dtype=np.uint8)
 
 
+class _Sensor:
+    """Fake ultrasonic sensor — distance_cm() is now called directly in the clear phase."""
+    def __init__(self, reading: float = 200.0):
+        self._reading = reading
+    def distance_cm(self) -> float:
+        return self._reading
+
+
 class _Obstacle:
-    def __init__(self, blocked=False, sudden=False, turn=False, dist=50.0):
+    def __init__(self, blocked=False, sudden=False, turn=False, dist=50.0,
+                 sensor_dist: float = 200.0):
         self._blocked = blocked
         self._sudden  = sudden
         self._turn    = turn
         self._dist    = dist
-        self.sensor   = object()  # opaque — only passed through to sweep_obstacle
+        self.sensor   = _Sensor(sensor_dist)
 
     def is_blocked(self)     : return self._blocked
     def is_sudden_stop(self) : return self._sudden
@@ -50,11 +63,12 @@ class _Controller:
         self.calls         = []
         self.current_speed = speed
 
-    def forward(self, spd):             self.calls.append(("forward", spd))
-    def backward(self, spd):            self.calls.append(("backward", spd))
-    def steer(self, angle):             self.calls.append(("steer", angle))
-    def steer_center(self):             self.calls.append(("steer_center",))
-    def force_stop(self):               self.calls.append(("force_stop",))
+    def forward(self, spd):              self.calls.append(("forward", spd))
+    def backward(self, spd):             self.calls.append(("backward", spd))
+    def steer(self, angle):              self.calls.append(("steer", angle))
+    def steer_center(self):              self.calls.append(("steer_center",))
+    def force_stop(self):                self.calls.append(("force_stop",))
+    def move_camera_to(self, axis, ang): self.calls.append(("move_camera_to", axis, ang))
     async def smooth_stop(self, rate=None): self.calls.append(("smooth_stop",))
 
 
@@ -165,6 +179,68 @@ class TestDirectionLabel:
 
 
 # ---------------------------------------------------------------------------
+# _SweepCache — pure logic, no hardware
+# ---------------------------------------------------------------------------
+
+class TestSweepCache:
+    def test_advance_cycles_left_center_right(self):
+        cache = _SweepCache()
+        names = [cache.advance()[0] for _ in range(6)]
+        assert names == ["left", "center", "right", "left", "center", "right"]
+
+    def test_advance_returns_servo_angle(self):
+        cache = _SweepCache()
+        _, angle = cache.advance()  # first position: left
+        assert isinstance(angle, int)
+        assert 0 <= angle <= 180
+
+    def test_any_side_blocked_false_initially(self):
+        assert not _SweepCache().any_side_blocked()
+
+    def test_any_side_blocked_when_distance_at_threshold(self):
+        cache = _SweepCache()
+        cache.distances["left"] = float(_STOP_CM)  # exactly at threshold (<=)
+        assert cache.any_side_blocked()
+
+    def test_any_side_blocked_when_distance_below_threshold(self):
+        cache = _SweepCache()
+        cache.distances["right"] = _STOP_CM - 5
+        assert cache.any_side_blocked()
+
+    def test_any_side_blocked_false_when_all_clear(self):
+        cache = _SweepCache()
+        cache.distances = {"left": 100.0, "center": 150.0, "right": 200.0}
+        assert not cache.any_side_blocked()
+
+    def test_should_slow_requires_yolo_and_distance(self):
+        cache = _SweepCache()
+        cache.distances["left"]  = _WARN_CM - 10   # inside warn zone
+        cache.detections["left"] = [{"x1": 0, "y1": 0, "x2": 100, "y2": 100}]
+        assert cache.should_slow()
+
+    def test_should_slow_false_without_yolo(self):
+        cache = _SweepCache()
+        cache.distances["right"] = _WARN_CM - 10   # inside warn zone
+        cache.detections["right"] = []              # no YOLO → no slow
+        assert not cache.should_slow()
+
+    def test_should_slow_false_outside_warn_zone(self):
+        cache = _SweepCache()
+        cache.distances["center"] = _WARN_CM + 10  # outside warn zone
+        cache.detections["center"] = [{"x1": 0, "y1": 0, "x2": 100, "y2": 100}]
+        assert not cache.should_slow()
+
+    def test_sweep_positions_span_all_three_names(self):
+        names = {name for name, _ in _SWEEP_POSITIONS}
+        assert names == {"left", "center", "right"}
+
+    def test_left_angle_greater_than_right_angle(self):
+        angles = {name: angle for name, angle in _SWEEP_POSITIONS}
+        # For servo1: left = larger angle, right = smaller angle
+        assert angles["left"] > angles["right"]
+
+
+# ---------------------------------------------------------------------------
 # navigate_step — full pipeline mocked at module level
 # ---------------------------------------------------------------------------
 
@@ -190,28 +266,32 @@ class TestNavigateStep:
 
     # -----------------------------------------------------------------------
 
+    def _cache(self):
+        return _SweepCache()
+
     def test_approaching_sends_correct_phase(self):
         obs  = _Obstacle(turn=True)
         ctrl = _Controller()
         ws   = _WS()
-        _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws))
+        _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws, self._cache()))
         assert ws.phases()[-1] == "approaching"
 
     def test_approaching_drives_at_approach_speed(self):
         obs  = _Obstacle(turn=True)
         ctrl = _Controller()
         ws   = _WS()
-        _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws))
+        _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws, self._cache()))
         assert ("forward", APPROACH_SPEED) in ctrl.calls
 
     def test_clear_phase_steers_and_drives(self):
         obs  = _Obstacle()
         ctrl = _Controller()
         ws   = _WS()
-        auto_mod.capture_bgr = lambda cam: _blank_frame()
-        auto_mod.detect      = lambda f: (0.0, 0.6)
+        auto_mod.capture_bgr      = lambda cam: _blank_frame()
+        auto_mod.detect           = lambda f: (0.0, 0.6)
+        auto_mod.detect_obstacles = lambda f: []
 
-        _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws))
+        _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws, self._cache()))
 
         assert ws.phases()[-1] == "clear"
         assert any(c[0] == "forward" for c in ctrl.calls)
@@ -220,12 +300,86 @@ class TestNavigateStep:
         obs  = _Obstacle()
         ctrl = _Controller()
         ws   = _WS()
-        auto_mod.capture_bgr = lambda cam: _blank_frame()
-        auto_mod.detect      = lambda f: (0.0, 0.1)  # below MIN_CONFIDENCE
+        auto_mod.capture_bgr      = lambda cam: _blank_frame()
+        auto_mod.detect           = lambda f: (0.0, 0.1)  # below MIN_CONFIDENCE
+        auto_mod.detect_obstacles = lambda f: []
 
-        _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws))
+        _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws, self._cache()))
 
         assert ("steer_center",) in ctrl.calls
+
+    def test_clear_moves_head_to_sweep_position(self):
+        obs  = _Obstacle()
+        ctrl = _Controller()
+        ws   = _WS()
+        auto_mod.capture_bgr      = lambda cam: _blank_frame()
+        auto_mod.detect           = lambda f: (0.0, 0.6)
+        auto_mod.detect_obstacles = lambda f: []
+
+        _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws, self._cache()))
+
+        assert any(c[0] == "move_camera_to" for c in ctrl.calls)
+
+    def test_clear_caches_sensor_reading(self):
+        obs  = _Obstacle(sensor_dist=120.0)
+        ctrl = _Controller()
+        ws   = _WS()
+        auto_mod.capture_bgr      = lambda cam: _blank_frame()
+        auto_mod.detect           = lambda f: (0.0, 0.6)
+        auto_mod.detect_obstacles = lambda f: []
+        cache = self._cache()
+
+        _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws, cache))
+
+        filled = [d for d in cache.distances.values() if d is not None]
+        assert len(filled) == 1
+        assert filled[0] == 120.0
+
+    def test_clear_slows_when_yolo_and_distance_warn(self):
+        """YOLO detection + distance inside warn zone → APPROACH_SPEED."""
+        obs  = _Obstacle(sensor_dist=40.0)  # < _WARN_CM (60)
+        ctrl = _Controller()
+        ws   = _WS()
+        auto_mod.capture_bgr      = lambda cam: _blank_frame()
+        auto_mod.detect           = lambda f: (0.0, 0.6)
+        auto_mod.detect_obstacles = lambda f: [
+            {"x1": 100, "y1": 50, "x2": 300, "y2": 200, "conf": 0.85, "class_id": 0}
+        ]
+
+        _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws, self._cache()))
+
+        assert ("forward", APPROACH_SPEED) in ctrl.calls
+
+    def test_clear_full_speed_when_no_yolo(self):
+        """YOLO returns nothing → AUTONOMOUS_SPEED even if distance is in warn zone."""
+        obs  = _Obstacle(sensor_dist=40.0)
+        ctrl = _Controller()
+        ws   = _WS()
+        auto_mod.capture_bgr      = lambda cam: _blank_frame()
+        auto_mod.detect           = lambda f: (0.0, 0.6)
+        auto_mod.detect_obstacles = lambda f: []
+
+        _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws, self._cache()))
+
+        assert ("forward", AUTONOMOUS_SPEED) in ctrl.calls
+
+    def test_side_blocked_triggers_force_stop_and_recentre(self):
+        """A cached side distance <= STOP_CM should force_stop + re-centre head."""
+        obs  = _Obstacle()  # forward sensor clear
+        ctrl = _Controller()
+        ws   = _WS()
+        auto_mod.capture_bgr      = lambda cam: _blank_frame()
+        auto_mod.detect_obstacles = lambda f: []
+        auto_mod.detect           = lambda f: (0.0, 0.0)
+        cache = self._cache()
+        # Pre-load a stop-zone reading (simulates a previous tick's sweep result)
+        cache.distances["right"] = _STOP_CM - 1
+
+        _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws, cache))
+
+        assert ("force_stop",) in ctrl.calls
+        head_moves = [c for c in ctrl.calls if c[0] == "move_camera_to"]
+        assert head_moves, "move_camera_to not called to re-centre head"
 
     def test_sudden_stop_calls_force_stop(self):
         obs  = _Obstacle(blocked=True, sudden=True, dist=5.0)
@@ -235,7 +389,7 @@ class TestNavigateStep:
         auto_mod.detect_obstacles = lambda f: []
         auto_mod.detect           = lambda f: (0.0, 0.0)
 
-        _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws))
+        _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws, self._cache()))
 
         assert ("force_stop",) in ctrl.calls
 
@@ -254,7 +408,7 @@ class TestNavigateStep:
                                                          {"left": 60.0, "center": 45.0, "right": 20.0})
         auto_mod.execute_avoidance = lambda ctrl, cam, dec: asyncio.sleep(0)  # fast no-op
 
-        _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws))
+        _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws, self._cache()))
 
         assert swept, "sweep_obstacle was not called on the YOLO path"
 
@@ -270,7 +424,7 @@ class TestNavigateStep:
         auto_mod.sweep_obstacle   = lambda c, s, l, r: {"left": 60.0, "center": 45.0, "right": 20.0}
         auto_mod.execute_avoidance = lambda ctrl, cam, dec: asyncio.sleep(0)
 
-        _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws))
+        _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws, self._cache()))
 
         assert "avoiding" in ws.phases()
 
@@ -285,7 +439,7 @@ class TestNavigateStep:
         auto_mod.detect           = lambda f: (0.5, 0.7)  # confident, steer right
         auto_mod.execute_avoidance = lambda ctrl, cam, dec: asyncio.sleep(0)
 
-        _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws))
+        _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws, self._cache()))
 
         assert "avoiding" in ws.phases()
 
@@ -299,7 +453,7 @@ class TestNavigateStep:
         auto_mod.detect_obstacles = lambda f: []
         auto_mod.detect           = lambda f: (0.0, 0.1)  # below MIN_CONFIDENCE
 
-        _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws))
+        _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws, self._cache()))
 
         assert "blocked" in ws.phases()
         assert any(c[0] == "backward" for c in ctrl.calls)
@@ -315,7 +469,7 @@ class TestNavigateStep:
         auto_mod.detect_obstacles = lambda f: (yolo_called.append(True) or [])
         auto_mod.detect           = lambda f: (0.0, 0.0)
 
-        _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws))
+        _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws, self._cache()))
 
         # force_stop must have been called (sudden stop path)
         assert ("force_stop",) in ctrl.calls

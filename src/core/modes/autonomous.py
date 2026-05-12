@@ -72,6 +72,59 @@ _FRAME_W     = 640   # lores stream width fed to YOLO and free-space
 _MIN_SPEED   = 0.1   # below this throttle the robot is considered stopped
 _LOOP_PERIOD = 0.1   # target seconds per navigation tick
 
+# ---------------------------------------------------------------------------
+# Clear-phase lateral sweep
+# ---------------------------------------------------------------------------
+
+_SERVO1_CENTER   = SERVO_CFG["servo1"]["center_angle"]
+_SERVO1_MIN      = SERVO_CFG["servo1"]["max_angle"]     # 0   — full right
+_SERVO1_MAX      = SERVO_CFG["servo1"]["min_angle"]     # 180 — full left
+_SWEEP_ANGLE_DEG = AUTONOMOUS_CFG["sweep_angle_deg"]
+_WARN_CM         = AUTONOMOUS_CFG["warn_cm"]
+_STOP_CM         = OBSTACLE_AVOIDANCE_CFG["stop_cm"]
+_HEAD_SETTLE_S   = 0.08  # seconds — enough for the head to travel ≈20° arc
+
+# (name, servo1 angle) triples traversed left → centre → right each tick cycle
+_SWEEP_POSITIONS: list[tuple[str, int]] = [
+    ("left",   int(min(_SERVO1_MAX, round(_SERVO1_CENTER + _SWEEP_ANGLE_DEG)))),
+    ("center", int(round(_SERVO1_CENTER))),
+    ("right",  int(max(_SERVO1_MIN, round(_SERVO1_CENTER - _SWEEP_ANGLE_DEG)))),
+]
+
+
+class _SweepCache:
+    """Rotating 3-position sensor cache for the clear phase.
+
+    Each navigate_step call in the clear phase advances to the next position
+    (left → center → right → left …), stores ultrasonic distance and YOLO
+    detections, and uses the cached data to adapt speed before the forward
+    ultrasonic would trigger is_blocked().
+    """
+
+    def __init__(self):
+        self._idx       = 0
+        self.distances  = {"left": None, "center": None, "right": None}
+        self.detections: dict[str, list] = {"left": [],   "center": [],   "right": []}
+        self.last_error = 0.0
+        self.last_conf  = 0.0
+
+    def advance(self) -> tuple[str, int]:
+        """Return (name, servo_angle) for the current position and advance the index."""
+        name, angle = _SWEEP_POSITIONS[self._idx]
+        self._idx = (self._idx + 1) % len(_SWEEP_POSITIONS)
+        return name, angle
+
+    def any_side_blocked(self) -> bool:
+        """True if any cached distance is in the stop zone."""
+        return any(d is not None and d <= _STOP_CM for d in self.distances.values())
+
+    def should_slow(self) -> bool:
+        """True if YOLO + ultrasonic agree an obstacle is in the warning zone."""
+        return any(
+            d is not None and d < _WARN_CM and bool(self.detections[name])
+            for name, d in self.distances.items()
+        )
+
 
 # ---------------------------------------------------------------------------
 # Pure helpers
@@ -201,23 +254,66 @@ async def _handle_approaching(controller, websocket):
     controller.forward(APPROACH_SPEED)
 
 
-async def _handle_clear(controller, camera, websocket):
-    loop = asyncio.get_running_loop()
-    try:
-        frame       = await loop.run_in_executor(None, capture_bgr, camera)
-        error, conf = await loop.run_in_executor(None, detect, frame)
-    except Exception:
-        log.exception("free_space capture failed in clear phase — centering steering.")
-        error, conf = 0.0, 0.0
+async def _handle_clear(controller, camera, obstacle, websocket, sweep_cache):
+    """One tick of the clear phase.
 
-    if conf >= MIN_CONFIDENCE:
-        steer_angle = round(_CENTER_ANGLE - error * _STEER_HALF_RANGE)
-        controller.steer(int(steer_angle))
+    Advances the sweep index, points the head servo to the next position, then
+    concurrently captures a frame and reads the ultrasonic sensor (which now
+    measures in the direction the head is pointing).
+
+    On center ticks: YOLO + free-space run concurrently; steering is updated.
+    On left/right ticks: YOLO only (free-space is invalid when the head is angled).
+
+    Speed is reduced to APPROACH_SPEED if the sweep cache shows a YOLO-confirmed
+    obstacle inside the warning zone; otherwise full AUTONOMOUS_SPEED.
+    """
+    loop = asyncio.get_running_loop()
+    name, head_angle = sweep_cache.advance()
+    controller.move_camera_to("x", head_angle)
+
+    # Capture frame and read ultrasonic concurrently — both block the calling thread.
+    try:
+        frame, dist = await asyncio.gather(
+            loop.run_in_executor(None, capture_bgr, camera),
+            loop.run_in_executor(None, obstacle.sensor.distance_cm),
+        )
+    except Exception:
+        log.exception("clear phase: capture/sensor failed — skipping tick.")
+        return
+
+    sweep_cache.distances[name] = dist
+
+    if name == "center":
+        # YOLO and free-space both need the same forward frame — run them in parallel.
+        try:
+            dets, (error, conf) = await asyncio.gather(
+                loop.run_in_executor(None, detect_obstacles, frame),
+                loop.run_in_executor(None, detect, frame),
+            )
+        except Exception:
+            log.exception("clear phase center: inference failed.")
+            dets, error, conf = [], 0.0, 0.0
+        sweep_cache.detections[name] = dets
+        if conf >= MIN_CONFIDENCE:
+            controller.steer(int(round(_CENTER_ANGLE - error * _STEER_HALF_RANGE)))
+        else:
+            error = 0.0
+            controller.steer_center()
+        sweep_cache.last_error = error
+        sweep_cache.last_conf  = conf
     else:
-        error = 0.0
-        controller.steer_center()
-    controller.forward(AUTONOMOUS_SPEED)
-    await _send(websocket, "clear", error, conf)
+        # Off-center: free-space result would be invalid; YOLO still gives early warning.
+        try:
+            sweep_cache.detections[name] = await loop.run_in_executor(
+                None, detect_obstacles, frame
+            )
+        except Exception:
+            log.exception("clear phase: YOLO failed at %s.", name)
+            sweep_cache.detections[name] = []
+
+    speed = APPROACH_SPEED if sweep_cache.should_slow() else AUTONOMOUS_SPEED
+    controller.forward(speed)
+    await _send(websocket, "clear", sweep_cache.last_error, sweep_cache.last_conf)
 
 
 async def _free_space_avoid(controller, camera, websocket):
@@ -308,13 +404,20 @@ async def setup(controller):
     controller.center_camera()
 
 
-async def navigate_step(controller, obstacle, camera, websocket):
-    if obstacle.is_blocked():
+async def navigate_step(controller, obstacle, camera, websocket, sweep_cache):
+    if obstacle.is_blocked() or sweep_cache.any_side_blocked():
+        if sweep_cache.any_side_blocked() and not obstacle.is_blocked():
+            # A sweep-cached reading triggered the stop — head is off-centre.
+            # Force-stop immediately, re-centre the head, then let the blocked
+            # handler read the ultrasonic once the head has had time to settle.
+            controller.force_stop()
+            controller.move_camera_to("x", int(round(_SERVO1_CENTER)))
+            await asyncio.sleep(_HEAD_SETTLE_S)
         await _handle_blocked(controller, obstacle, camera, websocket)
     elif obstacle.should_turn():
         await _handle_approaching(controller, websocket)
     else:
-        await _handle_clear(controller, camera, websocket)
+        await _handle_clear(controller, camera, obstacle, websocket, sweep_cache)
 
 
 _MAX_CONSECUTIVE_ERRORS = 5
@@ -322,13 +425,14 @@ _MAX_CONSECUTIVE_ERRORS = 5
 
 async def run_autonomous(controller, obstacle, camera, websocket):
     await setup(controller)
+    sweep_cache = _SweepCache()
     loop = asyncio.get_running_loop()
     consecutive_errors = 0
     try:
         while True:
             deadline = loop.time() + _LOOP_PERIOD
             try:
-                await navigate_step(controller, obstacle, camera, websocket)
+                await navigate_step(controller, obstacle, camera, websocket, sweep_cache)
                 consecutive_errors = 0
             except asyncio.CancelledError:
                 raise
