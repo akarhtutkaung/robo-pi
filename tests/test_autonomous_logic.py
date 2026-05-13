@@ -216,6 +216,12 @@ class TestSweepCache:
         cache.distances = {"left": 100.0, "center": 150.0, "right": 200.0}
         assert not cache.any_side_blocked()
 
+    def test_any_side_blocked_center_distance_ignored(self):
+        """Center distance below stop_cm must not trigger — forward ultrasonic owns that axis."""
+        cache = _SweepCache()
+        cache.distances["center"] = _STOP_CM - 5
+        assert not cache.any_side_blocked()
+
     def test_should_slow_requires_yolo_and_distance(self):
         cache = _SweepCache()
         cache.distances["left"]  = _WARN_CM - 10   # inside warn zone
@@ -223,17 +229,17 @@ class TestSweepCache:
         assert cache.should_slow()
 
     def test_should_slow_no_yolo_but_above_ultrasonic_threshold(self):
-        # _WARN_CM - 10 = 50 cm; ultrasonic-only threshold = _STOP_CM * 1.5 = 45 cm
-        # 50 > 45 → YOLO required at this distance; no YOLO → no slow
+        # _WARN_CM - 10 = 50 cm; ultrasonic-only threshold = _STOP_CM * 1.2 = 36 cm
+        # 50 > 36 → YOLO required at this distance; no YOLO → no slow
         cache = _SweepCache()
         cache.distances["right"] = _WARN_CM - 10
         cache.detections["right"] = []
         assert not cache.should_slow()
 
     def test_should_slow_ultrasonic_alone_triggers_below_threshold(self):
-        # Any distance < stop_cm * 1.5 slows even without YOLO (dark/novel objects)
+        # Any distance < stop_cm * 1.2 slows even without YOLO (dark/novel objects)
         cache = _SweepCache()
-        cache.distances["left"] = _STOP_CM * 1.5 - 1   # just inside threshold
+        cache.distances["left"] = _STOP_CM * 1.2 - 1   # just inside threshold
         cache.detections["left"] = []
         assert cache.should_slow()
 
@@ -367,7 +373,7 @@ class TestNavigateStep:
 
     def test_clear_full_speed_when_no_yolo(self):
         """YOLO returns nothing → AUTONOMOUS_SPEED when distance is above all slow thresholds."""
-        # 50 cm: inside warn_cm (60) but above ultrasonic-alone threshold (stop_cm*1.5 ≈ 45)
+        # 50 cm: inside warn_cm (60) but above ultrasonic-alone threshold (stop_cm*1.2 = 36)
         # and above side corridor threshold (~29 cm) → no slow condition fires
         obs  = _Obstacle(sensor_dist=50.0)
         ctrl = _Controller()
@@ -381,13 +387,14 @@ class TestNavigateStep:
         assert ("forward", AUTONOMOUS_SPEED) in ctrl.calls
 
     def test_side_blocked_triggers_force_stop_and_recentre(self):
-        """A cached side distance <= STOP_CM should force_stop + re-centre head."""
+        """A cached side distance <= STOP_CM should force_stop + re-centre head + steer away."""
         obs  = _Obstacle()  # forward sensor clear
         ctrl = _Controller()
         ws   = _WS()
-        auto_mod.capture_bgr      = lambda cam: _blank_frame()
-        auto_mod.detect_obstacles = lambda f: []
-        auto_mod.detect           = lambda f: (0.0, 0.0)
+        auto_mod.capture_bgr       = lambda cam: _blank_frame()
+        auto_mod.detect_obstacles  = lambda f: []
+        auto_mod.detect            = lambda f: (0.0, 0.0)
+        auto_mod.execute_avoidance = lambda c, cam, dec: asyncio.sleep(0)
         cache = self._cache()
         # Pre-load a stop-zone reading (simulates a previous tick's sweep result)
         cache.distances["right"] = _STOP_CM - 1
@@ -572,3 +579,160 @@ class TestSweepCacheCorridor:
         cache.distances["center"]  = dist
         cache.detections["center"] = [self._det_out(dist)]
         assert not cache.should_slow()
+
+
+# ---------------------------------------------------------------------------
+# _SweepCache.should_avoid_side — side obstacle escalation
+# ---------------------------------------------------------------------------
+
+class TestSweepCacheSideAvoid:
+
+    def test_false_initially(self):
+        assert not _SweepCache().should_avoid_side()
+
+    def test_true_left_with_yolo(self):
+        cache = _SweepCache()
+        cache.distances["left"]   = _WARN_CM - 10
+        cache.detections["left"]  = [{"x1": 0, "y1": 0, "x2": 100, "y2": 100}]
+        assert cache.should_avoid_side()
+
+    def test_true_right_with_yolo(self):
+        cache = _SweepCache()
+        cache.distances["right"]  = _WARN_CM - 10
+        cache.detections["right"] = [{"x1": 0, "y1": 0, "x2": 100, "y2": 100}]
+        assert cache.should_avoid_side()
+
+    def test_false_distance_only_no_yolo(self):
+        """Distance alone without YOLO confirmation must not trigger side-avoid."""
+        cache = _SweepCache()
+        cache.distances["left"]  = _WARN_CM - 10
+        cache.detections["left"] = []
+        assert not cache.should_avoid_side()
+
+    def test_false_yolo_only_beyond_warn(self):
+        """YOLO detection beyond warn_cm must not trigger side-avoid."""
+        cache = _SweepCache()
+        cache.distances["left"]  = _WARN_CM + 10
+        cache.detections["left"] = [{"x1": 0, "y1": 0, "x2": 100, "y2": 100}]
+        assert not cache.should_avoid_side()
+
+    def test_false_center_detection_only(self):
+        """Center-direction readings must not trigger should_avoid_side."""
+        cache = _SweepCache()
+        cache.distances["center"]  = _WARN_CM - 10
+        cache.detections["center"] = [{"x1": 0, "y1": 0, "x2": 100, "y2": 100}]
+        assert not cache.should_avoid_side()
+
+    def test_false_at_exact_warn_boundary(self):
+        """Distance exactly equal to _WARN_CM must not trigger (condition is strictly <)."""
+        cache = _SweepCache()
+        cache.distances["left"]  = float(_WARN_CM)
+        cache.detections["left"] = [{"x1": 0, "y1": 0, "x2": 100, "y2": 100}]
+        assert not cache.should_avoid_side()
+
+    def test_invalidate_clears_all_readings(self):
+        cache = _SweepCache()
+        cache.distances  = {"left": 10.0, "center": 20.0, "right": 30.0}
+        cache.detections = {"left": [{"x1": 0}], "center": [], "right": []}
+        cache.invalidate()
+        assert all(v is None for v in cache.distances.values())
+        assert all(v == []   for v in cache.detections.values())
+
+    def test_invalidate_prevents_should_avoid_side_re_trigger(self):
+        cache = _SweepCache()
+        cache.distances["left"]  = _WARN_CM - 10
+        cache.detections["left"] = [{"x1": 0, "y1": 0, "x2": 100, "y2": 100}]
+        assert cache.should_avoid_side()
+        cache.invalidate()
+        assert not cache.should_avoid_side()
+
+
+# ---------------------------------------------------------------------------
+# navigate_step — side-avoid path
+# ---------------------------------------------------------------------------
+
+class TestNavigateStepSideAvoid:
+    """navigate_step must route confirmed side threats through _handle_side_threat."""
+
+    @pytest.fixture(autouse=True)
+    def restore_module_attrs(self):
+        originals = {
+            "capture_bgr":       auto_mod.capture_bgr,
+            "detect":            auto_mod.detect,
+            "detect_obstacles":  auto_mod.detect_obstacles,
+            "execute_avoidance": auto_mod.execute_avoidance,
+        }
+        yield
+        for name, val in originals.items():
+            setattr(auto_mod, name, val)
+
+    def _armed_cache(self, side="left"):
+        cache = _SweepCache()
+        cache.distances[side]  = _WARN_CM - 10
+        cache.detections[side] = [{"x1": 0, "y1": 0, "x2": 100, "y2": 100}]
+        return cache
+
+    def test_side_avoid_sends_avoiding_phase(self):
+        """Side distance < warn_cm + YOLO → avoiding phase sent."""
+        obs  = _Obstacle()
+        ctrl = _Controller()
+        ws   = _WS()
+        auto_mod.execute_avoidance = lambda c, cam, dec: asyncio.sleep(0)
+
+        _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws, self._armed_cache()))
+
+        assert "avoiding" in ws.phases()
+
+    def test_side_avoid_does_not_force_stop(self):
+        """Side avoid is a steering correction — no hard stop."""
+        obs  = _Obstacle()
+        ctrl = _Controller()
+        ws   = _WS()
+        auto_mod.execute_avoidance = lambda c, cam, dec: asyncio.sleep(0)
+
+        _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws, self._armed_cache()))
+
+        assert ("force_stop",) not in ctrl.calls
+
+    def test_side_avoid_turns_right_when_left_threatened(self):
+        """Obstacle on the left → TURN_RIGHT (steer away from threat)."""
+        obs       = _Obstacle()
+        decisions = []
+        auto_mod.execute_avoidance = lambda c, cam, dec: (decisions.append(dec), asyncio.sleep(0))[1]
+
+        _run(auto_mod.navigate_step(_Controller(), obs, _Camera(), _WS(), self._armed_cache("left")))
+
+        assert decisions == ["TURN_RIGHT"]
+
+    def test_side_avoid_turns_left_when_right_threatened(self):
+        """Obstacle on the right → TURN_LEFT (steer away from threat)."""
+        obs       = _Obstacle()
+        decisions = []
+        auto_mod.execute_avoidance = lambda c, cam, dec: (decisions.append(dec), asyncio.sleep(0))[1]
+
+        _run(auto_mod.navigate_step(_Controller(), obs, _Camera(), _WS(), self._armed_cache("right")))
+
+        assert decisions == ["TURN_LEFT"]
+
+    def test_side_avoid_invalidates_cache(self):
+        """Cache must be cleared after avoidance so stale readings cannot re-trigger."""
+        obs   = _Obstacle()
+        cache = self._armed_cache()
+        auto_mod.execute_avoidance = lambda c, cam, dec: asyncio.sleep(0)
+
+        _run(auto_mod.navigate_step(_Controller(), obs, _Camera(), _WS(), cache))
+
+        assert all(v is None for v in cache.distances.values())
+
+    def test_side_avoid_does_not_fire_when_clear(self):
+        """No side obstacle → side-avoid path not entered."""
+        obs  = _Obstacle()
+        ws   = _WS()
+        auto_mod.execute_avoidance = lambda c, cam, dec: asyncio.sleep(0)
+        auto_mod.detect            = lambda f: (0.0, 0.6)
+        auto_mod.capture_bgr       = lambda cam: np.zeros((480, 640, 3), dtype=np.uint8)
+        auto_mod.detect_obstacles  = lambda f: []
+
+        _run(auto_mod.navigate_step(_Controller(), obs, _Camera(), ws, _SweepCache()))
+
+        assert "avoiding" not in ws.phases()

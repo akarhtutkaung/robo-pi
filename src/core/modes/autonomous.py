@@ -83,7 +83,7 @@ _SERVO1_MAX      = SERVO_CFG["servo1"]["min_angle"]     # 180 — full left
 _SWEEP_ANGLE_DEG = AUTONOMOUS_CFG["sweep_angle_deg"]
 _WARN_CM         = AUTONOMOUS_CFG["warn_cm"]
 _STOP_CM         = ULTRASONIC_CFG["stop_cm"]
-_HEAD_SETTLE_S   = 0.08  # seconds — enough for the head to travel ≈20° arc
+_HEAD_SETTLE_S   = 0.15  # seconds — covers 80-120 ms servo travel + camera pipeline latency
 
 # (name, servo1 angle) triples traversed left → centre → right each tick cycle
 _SWEEP_POSITIONS: list[tuple[str, int]] = [
@@ -120,8 +120,17 @@ class _SweepCache:
         return name, angle
 
     def any_side_blocked(self) -> bool:
-        """True if any cached distance is in the stop zone."""
-        return any(d is not None and d <= _STOP_CM for d in self.distances.values())
+        """True if any SIDE-direction cached distance is in the stop zone (center excluded).
+
+        Center readings belong to the forward-ultrasonic path (obstacle.is_blocked), which
+        applies physics-based smooth deceleration. Including center here would bypass that
+        and call force_stop() instead — a hard jerk stop when the obstacle is directly ahead.
+        """
+        return any(
+            d is not None and d <= _STOP_CM
+            for name, d in self.distances.items()
+            if name != "center"
+        )
 
     def should_slow(self) -> bool:
         """True if sweep data suggests slowing is warranted.
@@ -132,7 +141,7 @@ class _SweepCache:
         - in_corridor()     — YOLO sees obstacle in robot's body corridor, ultrasonic missed
         - side_in_corridor() — side geometry: obstacle in body path, YOLO also missed
         """
-        _ultrasonic_slow_cm = _STOP_CM * 1.5
+        _ultrasonic_slow_cm = _STOP_CM * 1.2
         for name, dist in self.distances.items():
             if dist is None:
                 continue
@@ -174,6 +183,28 @@ class _SweepCache:
             if d is not None and 0 < d < _SWEEP_SIDE_CORRIDOR_CM:
                 return True
         return False
+
+    def should_avoid_side(self) -> bool:
+        """True if a side-sweep reading is inside warn_cm AND YOLO confirms an obstacle there.
+
+        Fills the gap between should_slow() (reduces speed) and any_side_blocked() (hard stop):
+        an obstacle 30–warn_cm on the side that YOLO also sees warrants full avoidance, not
+        just a speed reduction.
+        """
+        for name in ("left", "right"):
+            d = self.distances[name]
+            if d is not None and d < _WARN_CM and self.detections[name]:
+                return True
+        return False
+
+    def invalidate(self):
+        """Reset all cached sensor readings after avoidance completes.
+
+        Prevents stale left/right readings from a previously-passed obstacle from
+        re-triggering should_avoid_side() or any_side_blocked() on subsequent ticks.
+        """
+        self.distances  = {"left": None, "center": None, "right": None}
+        self.detections = {"left": [],   "center": [],   "right": []}
 
 
 # ---------------------------------------------------------------------------
@@ -344,7 +375,11 @@ async def _handle_clear(controller, camera, obstacle, websocket, sweep_cache):
             log.exception("clear phase center: inference failed.")
             dets, error, conf = [], 0.0, 0.0
         sweep_cache.detections[name] = dets
-        if conf >= MIN_CONFIDENCE:
+        in_path = sweep_cache.in_corridor()
+        if in_path:
+            controller.steer_center()
+            error = 0.0
+        elif conf >= MIN_CONFIDENCE:
             controller.steer(int(round(_CENTER_ANGLE - error * _STEER_HALF_RANGE)))
         else:
             error = 0.0
@@ -446,6 +481,37 @@ async def _handle_blocked(controller, obstacle, camera, websocket):
     await _free_space_avoid(controller, camera, websocket)
 
 
+async def _handle_side_threat(controller, camera, websocket, sweep_cache):
+    """Steer away from a YOLO-confirmed side obstacle cached in the sweep data.
+
+    Uses cached distances directly rather than routing through _handle_blocked —
+    the forward ultrasonic may read clear while the side threat is real, so
+    _handle_blocked's deceleration logic and forward-facing YOLO sweep would both
+    target the wrong axis. A TURN_LEFT/TURN_RIGHT manoeuvre is sufficient since
+    the robot is still in forward motion.
+
+    Invalidates the sweep cache on exit so the same reading cannot re-trigger.
+    """
+    left_d  = sweep_cache.distances.get("left")
+    right_d = sweep_cache.distances.get("right")
+
+    left_threatened  = left_d  is not None and left_d  < _WARN_CM and sweep_cache.detections["left"]
+    right_threatened = right_d is not None and right_d < _WARN_CM and sweep_cache.detections["right"]
+
+    if left_threatened and (not right_threatened or left_d <= right_d):
+        decision = "TURN_RIGHT"
+    elif right_threatened:
+        decision = "TURN_LEFT"
+    else:
+        decision = "TURN_RIGHT"   # fallback — should be unreachable via should_avoid_side()
+
+    log.info("Side threat: left=%.1f right=%.1f → %s",
+             left_d or -1.0, right_d or -1.0, decision)
+    await _send(websocket, "avoiding", 0.0, 1.0)
+    await execute_avoidance(controller, camera, decision)
+    sweep_cache.invalidate()
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -457,13 +523,23 @@ async def setup(controller):
 async def navigate_step(controller, obstacle, camera, websocket, sweep_cache):
     if obstacle.is_blocked() or sweep_cache.any_side_blocked():
         if sweep_cache.any_side_blocked() and not obstacle.is_blocked():
-            # A sweep-cached reading triggered the stop — head is off-centre.
-            # Force-stop immediately, re-centre the head, then let the blocked
-            # handler read the ultrasonic once the head has had time to settle.
+            # Side hard-stop: forward sensor is clear, threat is lateral.
+            # Stop, re-centre the head so the camera faces forward, settle,
+            # then steer away using the cached sweep data.
             controller.force_stop()
             controller.move_camera_to("x", int(round(_SERVO1_CENTER)))
             await asyncio.sleep(_HEAD_SETTLE_S)
-        await _handle_blocked(controller, obstacle, camera, websocket)
+            await _handle_side_threat(controller, camera, websocket, sweep_cache)
+        else:
+            # Forward blocked (obstacle.is_blocked() True, any side reading is secondary).
+            await _handle_blocked(controller, obstacle, camera, websocket)
+            sweep_cache.invalidate()
+    elif sweep_cache.should_avoid_side():
+        # Side obstacle inside warn_cm with YOLO confirmation — steer away using
+        # cached sweep data. _handle_blocked is not used here because the forward
+        # ultrasonic may read clear; its deceleration logic and YOLO sweep target
+        # the wrong axis for a side threat.
+        await _handle_side_threat(controller, camera, websocket, sweep_cache)
     elif obstacle.should_turn():
         await _handle_approaching(controller, websocket)
     else:

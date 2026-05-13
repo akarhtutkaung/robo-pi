@@ -205,12 +205,20 @@ def select_primary_obstacle(detections: list, frame_width: int = 640):
 def classify_width_threat(detection: dict, frame_width: int = 640) -> str:
     """Classify a detection's apparent width relative to the frame.
 
-    WIDE   — ≥ 50 % of frame width → treat as wall/barrier, no passing attempt
-    MEDIUM — ≥ 25 % of frame width → measure and decide
+    WIDE   — ≥ 50 % of frame width AND centred within 30 % of the frame midpoint
+              → treat as wall/barrier, no passing attempt
+    MEDIUM — ≥ 25 % of frame width (or WIDE threshold but off-centre)
+              → measure and decide
     NARROW — < 25 % of frame width → single ping sufficient
+
+    The position check on WIDE prevents a wall or large obstacle at the frame edge
+    (e.g., a wall to the left) from triggering REVERSE_AND_TURN when turning away
+    from it would be the correct manoeuvre.
     """
     ratio = (detection["x2"] - detection["x1"]) / frame_width
-    if ratio >= 0.50:
+    center_x = (detection["x1"] + detection["x2"]) / 2.0
+    offset_ratio = abs(center_x - frame_width / 2.0) / (frame_width / 2.0)
+    if ratio >= 0.50 and offset_ratio < 0.3:
         return "WIDE"
     elif ratio >= 0.25:
         return "MEDIUM"

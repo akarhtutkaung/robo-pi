@@ -75,15 +75,30 @@ def test_select_primary_tiebreak_closer_to_centre():
 # ---------------------------------------------------------------------------
 
 def _det(x2: int, frame_width: int = 640) -> dict:
+    """Detection starting at x1=0 (left-edge anchor, used for off-centre cases)."""
     return {"x1": 0, "x2": x2}
 
 
+def _det_centered(width: int, frame_width: int = 640) -> dict:
+    """Detection centred on the frame midpoint."""
+    cx = frame_width // 2
+    hw = width // 2
+    return {"x1": cx - hw, "x2": cx + hw}
+
+
 def test_classify_wide():
-    assert classify_width_threat(_det(320), 640) == "WIDE"   # exactly 50 %
+    # 50 % width, perfectly centred → WIDE
+    assert classify_width_threat(_det_centered(320), 640) == "WIDE"
 
 
 def test_classify_wide_over_threshold():
-    assert classify_width_threat(_det(400), 640) == "WIDE"   # 62.5 %
+    # 62.5 % width, perfectly centred → WIDE
+    assert classify_width_threat(_det_centered(400), 640) == "WIDE"
+
+
+def test_classify_wide_off_centre_downgrades_to_medium():
+    # 50 % width but x1=0 → centre at 160, offset_ratio=0.5 → MEDIUM not WIDE
+    assert classify_width_threat(_det(320), 640) == "MEDIUM"
 
 
 def test_classify_medium():
