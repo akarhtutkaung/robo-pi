@@ -8,328 +8,363 @@
 | Component | Spec | Role |
 |---|---|---|
 | Raspberry Pi 5 | 4GB RAM, quad-core Cortex-A76 | Main compute |
-| Pi Camera Module 3 Wide | 102° horizontal FOV, 12MP | Obstacle detection + width estimation |
+| Pi Camera Module 3 Wide | 102° horizontal FOV, 12MP | Obstacle detection + free-space steering |
 | Ultrasonic sensor (HC-SR04) | ~15° beam angle, 2–400cm range | Metric distance measurement |
-| Servo motor | Shared mount for camera + ultrasonic | Directional targeting |
+| Servo motor (head, ch1) | Shared mount for camera + ultrasonic | Directional targeting + lateral sweep |
 
-**Critical constraint:** Camera and ultrasonic share the same servo. When the servo rotates, both sensors move together. YOLO inference during servo movement will produce detections from a shifted viewpoint — this must be handled explicitly in the software loop.
+**Critical constraint:** Camera and ultrasonic share the same servo. When the servo rotates, both sensors move together. YOLO inference run while the head is off-centre sees a shifted viewpoint — free-space steering is therefore only applied on centre-facing frames.
 
 ---
 
 ## 2. Core Strategy
 
-Use a **3-layer detection pipeline**:
+Four-layer detection pipeline:
 
 ```
-Layer 1 (Always On):   Ultrasonic hard-stop safety check — independent of everything else
-Layer 2 (Detection):   YOLOv8n detects obstacles, calculates bounding box geometry
-Layer 3 (Measurement): Servo targets obstacle, ultrasonic measures metric distance
-                        + Real physical width computed from pixel width + distance
+Layer 1 (Always On):   Ultrasonic phase classification — clear / approaching / blocked / sudden-stop
+Layer 2 (Clear Phase): Continuous lateral sweep (±20°) — YOLO + ultrasonic at each angle each tick
+                       Provides early warning and slows speed before Layer 1 triggers
+Layer 3 (Blocked):     YOLOv8n detects obstacle, servo sweep measures per-angle clearance
+                       decide_avoidance() selects TURN_LEFT / TURN_RIGHT / REVERSE_AND_TURN
+Layer 4 (Steering):    Free-space floor-colour detector drives steering on centre-facing frames
 ```
-
-Important: These layers are not sequential — Layer 1 runs in a separate thread. Layers 2 and 3 share the main loop.
 
 ---
 
-## 3. Processing Loop (Main Logic)
+## 3. Processing Loop (asyncio tick model)
+
+The navigation loop is a single asyncio coroutine running at 10 Hz (`_LOOP_PERIOD = 0.1 s`).
+No OS threads are used. Blocking I/O (camera capture, YOLO, ultrasonic) runs in the thread pool via `run_in_executor`.
 
 ```
-LOOP:
-  ├── [Thread A — always running]
-  │     Fire ultrasonic at current angle
-  │     If distance < HARD_STOP_CM (e.g. 20cm) → STOP motors immediately
-  │     No YOLO dependency, no servo dependency
+run_autonomous():
+  sweep_cache = _SweepCache()
+  LOOP every 0.1 s:
+    navigate_step(controller, obstacle, camera, websocket, sweep_cache)
+    sleep remaining budget
+
+navigate_step():
+  ├── obstacle.is_blocked() OR sweep_cache.any_side_blocked()
+  │     → if side-blocked: force_stop + re-centre head + 80ms settle
+  │     → _handle_blocked()
   │
-  └── [Thread B — main detection loop]
-        1. Servo at forward position (servo center)
-        2. Capture camera frame
-        3. Run YOLOv8n inference → get bounding boxes
-        4. If no detections → continue driving
-        5. If detections exist:
-             a. Select highest-priority obstacle (largest box / most centered)
-             b. Quick threat screen using bounding box width % (see Section 5)
-             c. Calculate bounding box center X → map to servo angle
-             d. Pause motor if needed (see latency note)
-             e. Rotate servo to obstacle center angle
-             f. Wait for servo settle (100ms)
-             g. Fire ultrasonic → record distance D_center
-             h. [Optional] Sweep left/right edges of bounding box (see Section 6)
-             i. Calculate real physical width (see Section 7)
-             j. Execute avoidance decision (see Section 8)
-             k. Return servo to forward position
+  ├── obstacle.should_turn()
+  │     → _handle_approaching()   # drive at approach_speed
+  │
+  └── else (clear)
+        → _handle_clear()         # advance sweep, steer, drive
+```
+
+**Phase thresholds** (from `config/hardware.yaml` under `obstacle_avoidance`):
+
+| Phase | Condition | Action |
+|---|---|---|
+| Clear | `distance > turn_cm` (90 cm) | Sweep + free-space steer, full speed |
+| Approaching | `stop_cm < distance ≤ turn_cm` | Drive at `approach_speed` |
+| Blocked | `distance ≤ stop_cm` (30 cm) | Physics-based smooth stop → avoidance pipeline |
+| Sudden stop | `distance < sudden_stop_cm` (20 cm) | `force_stop()` immediately |
+
+---
+
+## 4. Clear-Phase Lateral Sweep
+
+During normal forward driving, the head sweeps continuously across three positions each tick:
+
+```
+Tick 1: head → left  (+20°) → capture frame + read ultrasonic → YOLO
+Tick 2: head → center (0°)  → capture frame + read ultrasonic → YOLO + free-space
+Tick 3: head → right (-20°) → capture frame + read ultrasonic → YOLO
+Tick 4: repeat
+```
+
+**`_SweepCache`** stores the most recent `{distance, detections}` per position across ticks.
+
+Speed adaptation logic each tick:
+- `any_side_blocked()`: any cached distance ≤ `stop_cm` → `force_stop` + head re-centre + enter blocked pipeline
+- `should_slow()`: any cached distance < `warn_cm` (60 cm) AND YOLO detection at that angle → `approach_speed`
+- Otherwise: `autonomous_speed`
+
+**Why YOLO required for slowing:** Prevents false positives from ultrasonic noise on open space (ground reflections, narrow objects). YOLO + distance together give high confidence.
+
+**Key implementation detail:** Free-space steering is only updated on centre-frame ticks. On left/right ticks the camera FOV is angled, so the passability signal is invalid for forward path planning. The last computed steer angle is held between non-centre ticks.
+
+Configuration (`config/modes.yaml`):
+
+```yaml
+sweep_angle_deg: 20   # degrees either side of centre
+warn_cm: 60           # YOLO+ultrasonic early-warning threshold
 ```
 
 ---
 
-## 4. Servo Angle Mapping
+## 5. Servo Angle Mapping
 
-Pi Camera Module 3 Wide has **~102° horizontal FOV**.
-
-Map camera frame pixel X to servo angle:
+Pi Camera Module 3 Wide has **~102° horizontal FOV**. The wide-angle lens requires an `atan2` mapping — linear interpolation diverges by ~10° at frame edges.
 
 ```python
-FRAME_WIDTH = 640        # pixels
-CAMERA_HFOV = 102.0      # degrees, Pi Camera Module 3 Wide
-SERVO_CENTER = 90        # degrees (forward)
-SERVO_MIN = 39           # degrees (full left: 90 - 51)
-SERVO_MAX = 141          # degrees (full right: 90 + 51)
+# config/hardware.yaml → obstacle_avoidance.focal_length_px
+# Geometric estimate: (lores_width/2) / tan(hfov/2) = 320 / tan(51°) ≈ 259
+# Calibrate empirically: place a 30 cm object at 50 cm, measure pixel width W,
+# then set focal_length_px = (W * 50) / 30
 
-def pixel_x_to_servo_angle(pixel_x):
-    # Normalize pixel_x to [-0.5, 0.5]
-    normalized = (pixel_x / FRAME_WIDTH) - 0.5
-    # Scale to FOV
-    angle_offset = normalized * CAMERA_HFOV
-    # Apply to servo center
-    servo_angle = SERVO_CENTER + angle_offset
-    return max(SERVO_MIN, min(SERVO_MAX, servo_angle))
+def pixel_x_to_servo_angle(pixel_x: int, frame_width: int = 640) -> int:
+    offset_px = pixel_x - frame_width / 2.0
+    angle_deg = math.degrees(math.atan2(offset_px, FOCAL_LENGTH_PX))
+    raw_angle = SERVO1_CENTER - angle_deg        # servo1: left = larger angle
+    return int(round(max(SERVO1_MIN, min(SERVO1_MAX, raw_angle))))
 ```
 
-**Example:**
-- Obstacle center at pixel x=160 (left quarter) → servo angle ≈ 64°
-- Obstacle center at pixel x=320 (frame center) → servo angle = 90°
-- Obstacle center at pixel x=480 (right quarter) → servo angle ≈ 116°
+Servo1 config (`config/hardware.yaml`):
+
+| Key | Value | Meaning |
+|---|---|---|
+| `center_angle` | 89.85 | Forward |
+| `min_angle` | 180 | Full left |
+| `max_angle` | 0 | Full right |
 
 ---
 
-## 5. Quick Threat Screen (Bounding Box Width %)
+## 6. Quick Threat Screen (Bounding Box Width %)
 
-Before spending time on servo movement and ultrasonic pings, classify the obstacle's apparent width using the bounding box alone. This is fast — no servo movement required.
+Before spending time on servo movement, classify the obstacle's apparent width from the bounding box alone. Fast — no servo required.
 
 ```python
-def classify_width_threat(bbox_pixel_width, frame_width=640):
-    width_ratio = bbox_pixel_width / frame_width
-
-    if width_ratio > 0.50:
-        return "WIDE"     # occupies >50% of frame — treat as wall/large barrier
-    elif width_ratio > 0.20:
-        return "MEDIUM"   # may be passable depending on robot width
-    else:
-        return "NARROW"   # likely passable on either side
+def classify_width_threat(bbox, frame_width=640):
+    width_ratio = (bbox["x2"] - bbox["x1"]) / frame_width
+    if width_ratio >= 0.50:  return "WIDE"
+    elif width_ratio >= 0.25: return "MEDIUM"
+    else:                     return "NARROW"
 ```
 
-**Decision pre-filter:**
-- `WIDE` → Do not attempt to pass. Reverse or wide turn immediately. Skip ultrasonic sweep.
-- `MEDIUM` → Proceed to full ultrasonic measurement + width calculation.
-- `NARROW` → Single center ultrasonic ping sufficient. Check which side has clearance.
+| Class | Width ratio | Decision pre-filter |
+|---|---|---|
+| WIDE | ≥ 50% | Skip sweep. `REVERSE_AND_TURN` immediately. |
+| MEDIUM | 25–50% | Full 3-point sweep. Pass only if winning side ≥ `robot_width + clearance`. |
+| NARROW | < 25% | Full 3-point sweep. Pass on whichever side has more clearance. |
 
 ---
 
-## 6. Multi-Point Ultrasonic Sweep (For MEDIUM Obstacles)
+## 7. Multi-Point Ultrasonic Sweep (Blocked Phase)
 
-Fire the ultrasonic at 3 angles across the bounding box: left edge, center, right edge.
+When blocked, a servo sweep measures clearance at three angles spanning the obstacle bounding box. Always runs for MEDIUM and NARROW (WIDE skips directly to `REVERSE_AND_TURN`).
 
 ```python
-def sweep_obstacle(bbox_left_px, bbox_right_px):
+def sweep_obstacle(controller, sensor, bbox_left_px, bbox_right_px):
     angles = {
-        "left":   pixel_x_to_servo_angle(bbox_left_px),
-        "center": pixel_x_to_servo_angle((bbox_left_px + bbox_right_px) / 2),
-        "right":  pixel_x_to_servo_angle(bbox_right_px)
+        "left":   pixel_x_to_servo_angle(bbox_left_px  - margin),
+        "center": pixel_x_to_servo_angle((bbox_left_px + bbox_right_px) // 2),
+        "right":  pixel_x_to_servo_angle(bbox_right_px + margin),
     }
-
     readings = {}
     for label, angle in angles.items():
-        set_servo(angle)
-        time.sleep(0.10)           # settle time
-        readings[label] = ping_ultrasonic()
-        time.sleep(0.05)
-
-    return readings  # e.g. {"left": 48, "center": 50, "right": 52}
+        controller.move_camera_to("x", angle)
+        time.sleep(0.10)                    # servo settle
+        readings[label] = sensor.distance_cm()
+    controller.center_camera()
+    return readings   # e.g. {"left": 48, "center": 50, "right": 200}
 ```
 
-**Interpretation:**
-- Readings similar across all 3 → flat-fronted obstacle, width spans full bounding box
-- Right reading jumps far (e.g. 200cm) → right edge of obstacle is within bounding box, right side is clear
-- Left reading jumps far → left side is clear
+Total time: ~300–450 ms. Runs in the thread pool to avoid blocking the event loop.
 
-Total time for 3-point sweep: ~450ms. Account for this in motor speed tuning.
+**Interpretation:**
+- All readings similar → flat-fronted obstacle spanning full box
+- Right reading jumps far (e.g. 200 cm) → right edge of obstacle is near right box edge; right side clear
+- Left reading jumps far → left side clear
 
 ---
 
-## 7. Physical Width Calculation
+## 8. Physical Width Calculation
 
-Once you have center distance `D` from ultrasonic and bounding box pixel width `W_px` from YOLO, calculate the real physical width of the obstacle.
-
-**Formula:**
 ```
 real_width_cm = (W_px × D_cm) / focal_length_px
 ```
 
-**Calibrate focal length once** by placing a known-width object (e.g. 30cm box) at a known distance (e.g. 50cm) and measuring its pixel width:
+Calibrate `focal_length_px` once by placing a 30 cm object at 50 cm and measuring its pixel width `W`:
 
-```python
-# One-time calibration
-FOCAL_LENGTH_PX = (measured_pixel_width × known_distance_cm) / known_real_width_cm
-
-# Example: object is 30cm wide, placed 50cm away, measures 200px wide
-# FOCAL_LENGTH_PX = (200 × 50) / 30 = 333.3
-
-def calculate_real_width(bbox_pixel_width, distance_cm, focal_length_px=333.3):
-    return (bbox_pixel_width * distance_cm) / focal_length_px
+```
+focal_length_px = (W × 50) / 30
 ```
 
-**Combined decision input:**
-
-```python
-real_width = calculate_real_width(W_px, D_center)
-# Now you know: obstacle is Xcm wide and Ycm away
-# Compare to your robot's physical width to decide if passage is possible
-```
+Current estimate: **259 px** (geometric: `320 / tan(51°)`). Set in `config/hardware.yaml` under `obstacle_avoidance.focal_length_px`.
 
 ---
 
-## 8. Avoidance Decision Logic
+## 9. Avoidance Decision Logic
 
 ```python
-ROBOT_WIDTH_CM = 20        # measure your actual robot chassis width
-CLEARANCE_BUFFER_CM = 10   # minimum extra clearance on each side
-HARD_STOP_CM = 20          # Layer 1 threshold (Thread A)
-SLOW_DOWN_CM = 50          # start slowing
-AVOIDANCE_CM = 35          # trigger avoidance decision
-
-def decide_avoidance(width_threat, D_center, real_width, sweep_readings):
-
-    # Layer 1 handled by Thread A — already handled
-
-    # Too far away — no action
-    if D_center > SLOW_DOWN_CM:
-        return "CONTINUE"
-
-    # Slow down zone
-    if D_center > AVOIDANCE_CM:
-        return "SLOW"
-
-    # Within avoidance range
+def decide_avoidance(width_threat: str, sweep: dict) -> str:
+    """
+    width_threat — "WIDE" | "MEDIUM" | "NARROW"
+    sweep        — {"left": cm, "center": cm, "right": cm}
+    Returns      — "TURN_LEFT" | "TURN_RIGHT" | "REVERSE_AND_TURN"
+    """
     if width_threat == "WIDE":
         return "REVERSE_AND_TURN"
 
-    # Check if robot can physically fit
-    min_gap_needed = ROBOT_WIDTH_CM + (2 * CLEARANCE_BUFFER_CM)
-    # Determine which side has more clearance from sweep readings
-    left_clear = sweep_readings["left"] > AVOIDANCE_CM
-    right_clear = sweep_readings["right"] > AVOIDANCE_CM
+    left_cm  = sweep.get("left",  0.0)
+    right_cm = sweep.get("right", 0.0)
+    if left_cm == 0.0 and right_cm == 0.0:
+        return "REVERSE_AND_TURN"           # sweep failed — conservative fallback
 
-    if left_clear and sweep_readings["left"] > sweep_readings["right"]:
-        return "TURN_LEFT"
-    elif right_clear:
-        return "TURN_RIGHT"
-    else:
-        return "REVERSE_AND_TURN"
+    best_side = "TURN_LEFT" if left_cm >= right_cm else "TURN_RIGHT"
+    best_cm   = max(left_cm, right_cm)
+
+    if width_threat == "NARROW":
+        return best_side                    # pass on the better side unconditionally
+
+    # MEDIUM — only pass if the winning side has enough physical clearance
+    min_pass_gap = ROBOT_WIDTH_CM + CLEARANCE_BUFFER_CM   # default: 20 + 10 = 30 cm
+    return best_side if best_cm >= min_pass_gap else "REVERSE_AND_TURN"
 ```
+
+Distance zone filtering (slow-down, stop) is handled upstream by `ObstacleDetector` — `decide_avoidance` only runs once the robot is already stopped.
 
 ---
 
-## 9. Software Architecture
+## 10. Avoidance Maneuvers
+
+```python
+async def execute_avoidance(controller, camera, decision):
+    if decision == "TURN_LEFT":
+        controller.steer(STEER_LEFT)
+        controller.forward(AUTONOMOUS_SPEED)
+        await asyncio.sleep(turn_drive_s)           # 0.8 s
+        await controller.smooth_stop()
+        controller.steer_center()
+
+    elif decision == "TURN_RIGHT":
+        controller.steer(STEER_RIGHT)
+        controller.forward(AUTONOMOUS_SPEED)
+        await asyncio.sleep(turn_drive_s)
+        await controller.smooth_stop()
+        controller.steer_center()
+
+    else:  # REVERSE_AND_TURN — K-turn, direction chosen by free-space signal
+        # steer → settle → reverse → stop → opposite steer → settle → forward → centre → stop
+        ...
+```
+
+All timing constants live in `config/modes.yaml` (`turn_drive_s`, `kturn_*`) so they stay in sync with speed values.
+
+---
+
+## 11. Free-Space Steering (Clear Phase, Centre Frames Only)
+
+`src/perception/vision/free_space.py` — `detect(frame) → (error, confidence)`
+
+Floor-colour passability + edge-density penalty, entirely classical CV:
+
+1. Resize to 640×480 if needed.
+2. Crop ROI: rows 300–420, cols 80–560 (removes ceiling, chassis, wide-angle vignetting).
+3. HSV floor mask: saturation ≤ 60, brightness ≥ 100. Sum column-wise → floor coverage.
+4. Canny edges (after 9×9 Gaussian blur). Sum column-wise → obstacle density.
+5. `passability = floor_norm − 0.5 × edge_norm` per column (41-wide moving average).
+6. `free_col = argmax(passability)`.
+7. `error = (free_col − ROI_centre) / ROI_half_width` → [-1, 1].
+8. `confidence` = normalised spread between best and worst column.
+
+Steering is applied only when `confidence ≥ MIN_CONFIDENCE (0.25)`. Below threshold: `steer_center()`.
+
+```python
+steer_angle = round(CENTER_ANGLE - error * STEER_HALF_RANGE)
+controller.steer(int(steer_angle))
+```
+
+Tune `FLOOR_S_MAX` / `FLOOR_V_MIN` in `free_space.py` for your floor colour and lighting.
+
+---
+
+## 12. Software Architecture
 
 ```
 robo-pi/
-├── main.py                              # Entry point — selects operating mode
 ├── config/
-│   ├── hardware.yaml                    # All constants: thresholds, servo angles, pins, FOV, etc.
-│   └── modes.yaml                       # Mode-specific settings (autonomous speed, etc.)
+│   ├── hardware.yaml              # GPIO pins, servo angles, ultrasonic thresholds,
+│   │                              # focal_length_px, robot_width_cm, clearance_buffer_cm
+│   └── modes.yaml                 # Speed values, avoidance timing, sweep_angle_deg, warn_cm
 └── src/
     ├── core/
-    │   ├── config.py                    # Loads hardware.yaml + modes.yaml, exposes constants
+    │   ├── config.py              # Loads both yaml files, exposes named dicts
     │   └── modes/
-    │       ├── autonomous.py            # Thread A (ultrasonic hard-stop) +
-    │       │                            # Thread B (detect → decide → act loop)
-    │       └── remote.py                # Remote-controlled mode (WebSocket + WebRTC)
+    │       └── autonomous.py      # navigate_step, _handle_clear/approaching/blocked,
+    │                              # _SweepCache, decide_avoidance, execute_avoidance
     ├── hardware/
-    │   ├── motors.py                    # Rear DC motor via PCA9685
-    │   ├── servos.py                    # Steering servo + head pan/tilt servos
+    │   ├── motors.py              # RearMotor — smooth accel/decel ramp loop (50 Hz)
+    │   ├── servos.py              # Steering servo (ch0), head pan (ch1), head tilt (ch2)
     │   └── sensors/
-    │       └── ultrasonic.py            # HC-SR04 trigger/echo + distance calculation
+    │       └── ultrasonic.py      # HC-SR04: ObstacleDetector.is_blocked/should_turn/is_sudden_stop
     ├── perception/
-    │   ├── camera.py                    # Picamera2 capture, CameraSwitch (front/back cameras)
+    │   ├── camera.py              # CameraSwitch, reverse_cam() context manager, capture_bgr()
     │   └── vision/
-    │       ├── free_space.py            # Floor-colour + edge-density free-path detector
-    │       │                            # pixel_x_to_servo_angle() and width estimation go here
-    │       └── object_detection.py      # YOLOv8n inference — stub, to be implemented
+    │       ├── free_space.py      # detect(), draw_debug()
+    │       └── object_detection.py# detect_obstacles(), select_primary_obstacle(),
+    │                              # classify_width_threat(), sweep_obstacle(),
+    │                              # pixel_x_to_servo_angle(), calculate_real_width()
+    ├── comms/
+    │   └── debug_stream_server.py # Port 8080: combined free-space + YOLO MJPEG stream
     └── navigation/
-        └── controller.py                # High-level: forward(), turn(), steer(), smooth_stop()
-                                         # TURN_LEFT / TURN_RIGHT / REVERSE_AND_TURN routines go here
+        └── controller.py          # forward(), backward(), steer(), smooth_stop(), move_camera_to()
 ```
 
-**Mapping from the plan's proposed layout to the real structure:**
+**Implementation status:**
 
-| Plan module | Actual location |
+| Component | Status |
 |---|---|
-| `config.py` | `config/hardware.yaml` + `src/core/config.py` |
-| `hardware/servo.py` | `src/hardware/servos.py` |
-| `hardware/ultrasonic.py` | `src/hardware/sensors/ultrasonic.py` |
-| `hardware/motors.py` | `src/hardware/motors.py` |
-| `hardware/camera.py` | `src/perception/camera.py` |
-| `detection/yolo_detector.py` | `src/perception/vision/object_detection.py` (stub) |
-| `detection/angle_mapper.py` | Add to `src/perception/vision/free_space.py` |
-| `detection/width_estimator.py` | Add to `src/perception/vision/free_space.py` |
-| `avoidance/sweep.py` | Add to `src/core/modes/autonomous.py` |
-| `avoidance/decision.py` | `src/core/modes/autonomous.py` (already partially implemented) |
-| `avoidance/maneuver.py` | `src/navigation/controller.py` |
-| `threads/safety_thread.py` | `src/core/modes/autonomous.py` (Thread A) |
-| `threads/detection_thread.py` | `src/core/modes/autonomous.py` (Thread B) |
-
-The avoidance logic (sweep, decision, maneuver) lives inside `autonomous.py` rather than split into separate files. Split those out only once YOLO + servo sweep is implemented and the file becomes too large to manage.
+| Ultrasonic zone classification | ✅ Done |
+| YOLO obstacle detection (YOLOv8n ONNX 320px) | ✅ Done |
+| Servo sweep (3-point, pixel→angle via atan2) | ✅ Done |
+| Physical width calculation | ✅ Done |
+| decide_avoidance + execute_avoidance | ✅ Done |
+| Free-space floor-colour steering | ✅ Done |
+| Clear-phase lateral sweep (`_SweepCache`) | ✅ Done |
+| Camera switch (front ↔ back during reverse) | ✅ Done |
+| Physics-based smooth stop | ✅ Done |
+| SLAM | ❌ Not started |
+| Speech recognition | ❌ Not started |
 
 ---
 
-## 10. Recommended Libraries & Models
-
-| Purpose | Library / Model | Notes |
-|---|---|---|
-| Camera capture | `picamera2` | Official Pi 5 library |
-| YOLO inference | `ultralytics` YOLOv8n | Export to ONNX for faster Pi 5 inference |
-| ONNX runtime | `onnxruntime` | Faster than PyTorch on Pi 5 |
-| Servo / GPIO | `pigpio` | More precise PWM than RPi.GPIO |
-| Ultrasonic | `RPi.GPIO` or `pigpio` | pigpio preferred for accurate timing |
-| Optional depth | `MiDaS Small` via ONNX | Only if you need full-frame depth — 3–5 FPS |
-
-**YOLOv8n export for Pi 5:**
-```bash
-pip install ultralytics
-yolo export model=yolov8n.pt format=onnx imgsz=320
-# imgsz=320 gives faster inference than 640 with acceptable detection quality
-```
-
----
-
-## 11. Performance Expectations on Pi 5
+## 13. Performance Expectations on Pi 5
 
 | Step | Estimated Time |
 |---|---|
-| Camera capture (320×240) | ~5ms |
-| YOLOv8n ONNX inference (320px) | ~50–80ms (~15 FPS) |
-| Servo move + settle | ~100–150ms |
-| Single ultrasonic ping | ~10–30ms |
-| 3-point sweep (servo × 3 + pings) | ~450–600ms |
-| Full loop (single obstacle, center only) | ~200–300ms |
-| Full loop (medium obstacle, 3-point sweep) | ~600–800ms |
+| Camera capture (640×480 lores) | ~5 ms |
+| YOLOv8n ONNX inference (320px input) | ~50–80 ms |
+| Single ultrasonic ping | ~10–30 ms |
+| Servo move (20°) + settle | ~80–120 ms |
+| 3-point obstacle sweep | ~300–450 ms |
+| Clear phase tick (capture + YOLO + ultrasonic concurrent) | ~60–90 ms |
+| Centre tick (YOLO + free-space concurrent) | ~80–100 ms |
 
-**Implication:** At 3-point sweep speed (~600ms per decision cycle), safe operating speed for your robot is roughly **0.3–0.5 m/s maximum** with 35cm trigger distance. Faster than that and the robot cannot react in time. Tune your motor speed accordingly.
+**Normal driving (clear phase):** Each 100 ms tick runs one sweep position. A full left/center/right cycle completes in ~300 ms. YOLO and free-space run concurrently on centre frames — no serial wait.
 
----
-
-## 12. Known Limitations (Do Not Ignore)
-
-1. **Single ultrasonic beam** — even with sweeping, you are sampling discrete points, not a continuous profile. Irregularly shaped obstacles (e.g. chair legs) can be missed between sample angles.
-
-2. **Servo movement shifts camera frame** — YOLO detections during or after servo rotation are from a different viewpoint. Always return servo to forward before next YOLO inference.
-
-3. **MiDaS relative depth is not metric** — if you add MiDaS, its output must be calibrated against ultrasonic readings. Do not use raw MiDaS values as distances.
-
-4. **Ultrasonic fails on soft/angled surfaces** — foam, carpet edges, fabric, and angled walls absorb or deflect ultrasonic pulses. Hard-stop threshold should be conservative (20cm, not 10cm).
-
-5. **Wide-angle camera introduces barrel distortion** — pixel-to-angle mapping is only linear at frame center. For edge detections, apply lens distortion correction before mapping to servo angle. Pi Camera Module 3 supports calibration via OpenCV's `calibrateCamera()`.
-
-6. **YOLO has no depth awareness** — two objects at different distances with similar pixel widths will be classified similarly. The ultrasonic measurement is the ground truth for distance; YOLO only provides type and position.
+**Avoidance path:** Smooth stop + YOLO + 3-point sweep + maneuver = ~1–2 s total. Safe operating speed is ~0.3–0.5 m/s with `stop_cm = 30 cm`.
 
 ---
 
-## 13. Optional Upgrades (If Current Setup Is Insufficient)
+## 14. Known Limitations
+
+1. **Single ultrasonic beam** — discrete samples, not a continuous profile. Irregularly shaped obstacles (chair legs, narrow poles) can be missed between sample angles. Mitigated by the ±20° clear-phase sweep catching off-axis obstacles early.
+
+2. **Servo movement shifts camera frame** — free-space steering is only valid on centre-facing frames. Left/right sweep ticks use YOLO only.
+
+3. **Ultrasonic fails on soft/angled surfaces** — foam, carpet edges, and angled walls absorb or deflect pulses. `sudden_stop_cm = 20 cm` is intentionally conservative.
+
+4. **Free-space tuning is floor-specific** — `FLOOR_S_MAX` and `FLOOR_V_MIN` are calibrated for light-coloured, low-saturation floors. Recalibrate for carpet or coloured tile.
+
+5. **`focal_length_px` needs empirical calibration** — the default 259 px is a geometric estimate for the Pi Camera Module 3 Wide. Width estimates will be inaccurate until calibrated: place a 30 cm object at 50 cm, measure pixel width `W`, set `focal_length_px = (W × 50) / 30`.
+
+6. **YOLO has no depth awareness** — two objects at different distances with similar pixel widths are classified identically. Ultrasonic is the ground truth for distance; YOLO provides type, position, and bounding box geometry only.
+
+---
+
+## 15. Optional Upgrades
 
 | Upgrade | Cost | What It Solves |
 |---|---|---|
-| Second ultrasonic (side-facing, fixed) | ~$2 | Detects obstacles outside servo sweep zone |
+| IMU (MPU6050) | ~$3 | Detects if robot is stuck, spinning, or tipping |
+| Second ultrasonic (fixed forward-left/right at 30–45°) | ~$2 | Covers blind spots between the 20° sweep positions during blocking phase |
 | VL53L5CX ToF array (8×8 grid) | ~$15 | Full-width distance profile, no sweep needed |
-| IMU (MPU6050) | ~$3 | Detects if robot is stuck or tipping |
-| Coral USB Accelerator | ~$60 | Enables MiDaS + YOLO at real-time FPS on Pi 5 |
+| Coral USB Accelerator | ~$60 | Real-time YOLO + MiDaS depth at full 30 FPS on Pi 5 |
 
-The second ultrasonic is the highest value-per-dollar upgrade. Mount it facing forward-left or forward-right at a fixed 30–45° angle to catch obstacles that the servo-mounted sensor misses while pointing at a detected object.
+The fixed-angle second ultrasonic remains the highest value-per-dollar upgrade. The current servo sweep covers ±20° during clear driving, but the blocking-phase sweep points at the obstacle — a fixed side-facing sensor would cover flanks independently.
