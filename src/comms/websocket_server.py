@@ -12,7 +12,6 @@ Mode switching:
 
 import asyncio
 import json
-from src.perception.vision.object_detection import ObstacleDetector
 import websockets
 from src.core.config import WS_CFG
 from src.core.modes.manual import run_manual
@@ -20,12 +19,11 @@ from src.core.modes.autonomous import run_autonomous
 
 _RECV_TIMEOUT = 0.3  # poll interval while waiting for mode-switch in autonomous mode
 
-async def on_connect(websocket, controller, camera):
+async def on_connect(websocket, controller, camera, obstacle):
     print(f"Client connected: {websocket.remote_address}")
 
     current_mode = "manual"
     autonomous_task: asyncio.Task | None = None
-    obstacle: ObstacleDetector | None = None
 
     try:
         while True:
@@ -38,8 +36,9 @@ async def on_connect(websocket, controller, camera):
                     controller.center_steering()
                     if not controller.is_stopped():
                         asyncio.create_task(controller.smooth_stop())
-                    obstacle = ObstacleDetector()
-                    autonomous_task = asyncio.create_task(run_autonomous(controller, obstacle, camera, websocket))
+                    autonomous_task = asyncio.create_task(
+                        run_autonomous(controller, obstacle, camera, websocket)
+                    )
                     print("[mode] Switched to autonomous")
 
             else:  # autonomous — only watch for a switch back to manual
@@ -51,9 +50,6 @@ async def on_connect(websocket, controller, camera):
                         if autonomous_task and not autonomous_task.done():
                             autonomous_task.cancel()
                         autonomous_task = None
-                        if obstacle is not None:
-                            obstacle.cleanup()
-                            obstacle = None
                         controller.center_steering()
                         asyncio.create_task(controller.smooth_stop())
                         print("[mode] Switched to manual")
@@ -65,8 +61,6 @@ async def on_connect(websocket, controller, camera):
     finally:
         if autonomous_task and not autonomous_task.done():
             autonomous_task.cancel()
-        if obstacle is not None:
-            obstacle.cleanup()
         controller.center_steering()
         print(f"Client disconnected: {websocket.remote_address}")
         print("[!] Stopping robot due to disconnection...")
@@ -74,12 +68,12 @@ async def on_connect(websocket, controller, camera):
         print("[!] Robot stopped.")
 
 
-async def start_server(controller, camera):
+async def start_server(controller, camera, obstacle):
     host = WS_CFG["host"]
     port = WS_CFG["port"]
 
     async with websockets.serve(
-        lambda ws: on_connect(ws, controller, camera),
+        lambda ws: on_connect(ws, controller, camera, obstacle),
         host,
         port
     ) as server:

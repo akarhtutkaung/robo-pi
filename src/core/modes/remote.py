@@ -49,7 +49,7 @@ def run():
     try:
         async def _run_all():
             tasks = [
-                start_server(controller, cameras),
+                start_server(controller, cameras, obstacle),
                 start_webrtc_server(cameras, fc["main_width"], fc["main_height"]),
             ]
             if DEBUG_STREAM_CFG.get("enabled", False):
