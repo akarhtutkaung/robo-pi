@@ -29,7 +29,7 @@ from src.perception.vision.object_detection import (
     sweep_obstacle, calculate_real_width,
 )
 from src.perception.camera import capture_bgr
-from src.core.config import MOTOR_CFG, AUTONOMOUS_CFG, SERVO_CFG, OBSTACLE_AVOIDANCE_CFG
+from src.core.config import MOTOR_CFG, AUTONOMOUS_CFG, SERVO_CFG, OBSTACLE_AVOIDANCE_CFG, ULTRASONIC_CFG
 
 log = logging.getLogger(__name__)
 
@@ -81,7 +81,7 @@ _SERVO1_MIN      = SERVO_CFG["servo1"]["max_angle"]     # 0   — full right
 _SERVO1_MAX      = SERVO_CFG["servo1"]["min_angle"]     # 180 — full left
 _SWEEP_ANGLE_DEG = AUTONOMOUS_CFG["sweep_angle_deg"]
 _WARN_CM         = AUTONOMOUS_CFG["warn_cm"]
-_STOP_CM         = OBSTACLE_AVOIDANCE_CFG["stop_cm"]
+_STOP_CM         = ULTRASONIC_CFG["stop_cm"]
 _HEAD_SETTLE_S   = 0.08  # seconds — enough for the head to travel ≈20° arc
 
 # (name, servo1 angle) triples traversed left → centre → right each tick cycle
