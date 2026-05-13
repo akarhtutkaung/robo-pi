@@ -42,8 +42,15 @@ def _capture_and_encode(camera, obstacle) -> bytes:
         colour = (0, 165, 255)  # orange — approaching
     else:
         colour = (0, 255, 0)    # green  — clear
-    cv2.putText(vis, f"{dist_cm:.1f} cm",
-                (6, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.55, colour, 1, cv2.LINE_AA)
+    text     = f"{dist_cm:.1f} cm"
+    font     = cv2.FONT_HERSHEY_SIMPLEX
+    scale    = 1.2
+    thick    = 2
+    (tw, th), baseline = cv2.getTextSize(text, font, scale, thick)
+    h, w     = vis.shape[:2]
+    tx       = (w - tw) // 2
+    ty       = (h + th) // 2
+    cv2.putText(vis, text, (tx, ty), font, scale, colour, thick, cv2.LINE_AA)
 
     _, jpg = cv2.imencode(".jpg", vis, [cv2.IMWRITE_JPEG_QUALITY, _JPEG_QUALITY])
     return jpg.tobytes()
