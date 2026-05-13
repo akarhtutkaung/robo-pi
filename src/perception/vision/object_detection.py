@@ -376,6 +376,7 @@ if __name__ == "__main__":
         fc["framerate"],
         fc.get("rotate_180", False),
     )
+    obstacle = ObstacleDetector()
 
     server = HTTPServer(("0.0.0.0", _PORT), _Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -387,28 +388,45 @@ if __name__ == "__main__":
             t0         = time.perf_counter()
             frame      = capture_bgr(cam)
             detections = detect_obstacles(frame)
+            dist_cm    = obstacle.distance_cm()
             ms         = (time.perf_counter() - t0) * 1000
 
             vis = draw_detections(frame.copy(), detections)
+
+            # Ultrasonic distance — colour indicates phase
+            if dist_cm <= STOP_CM:
+                dist_colour = (0, 0, 255)    # red   — blocked
+            elif dist_cm <= TURN_CM:
+                dist_colour = (0, 165, 255)  # orange — approaching
+            else:
+                dist_colour = (0, 255, 0)    # green  — clear
+
+            cv2.putText(vis, f"{dist_cm:.1f} cm",
+                        (6, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                        dist_colour, 1, cv2.LINE_AA)
             cv2.putText(vis, f"{len(detections)} det  {ms:.0f} ms",
-                        (6, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                        (6, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
                         (0, 200, 255), 1, cv2.LINE_AA)
 
             _, jpg = cv2.imencode(".jpg", vis, [cv2.IMWRITE_JPEG_QUALITY, 80])
             with _lock:
                 _shared["jpg"] = jpg.tobytes()
 
+            phase = ("BLOCKED" if dist_cm <= STOP_CM
+                     else "APPROACH" if dist_cm <= TURN_CM
+                     else "CLEAR")
             if detections:
                 names = ", ".join(
                     f"{_COCO_LABELS.get(d['class_id'], d['class_id'])} "
                     f"{d['conf']:.2f}"
                     for d in detections
                 )
-                print(f"[{ms:5.0f} ms]  {len(detections)} det: {names}")
+                print(f"[{ms:5.0f} ms]  {dist_cm:5.1f} cm [{phase}]  {len(detections)} det: {names}")
             else:
-                print(f"[{ms:5.0f} ms]  —")
+                print(f"[{ms:5.0f} ms]  {dist_cm:5.1f} cm [{phase}]  —")
 
     except KeyboardInterrupt:
         print("\nStopped.")
     finally:
-        cam.stop()  # server thread is daemon — exits with the main thread
+        cam.stop()
+        obstacle.cleanup()
