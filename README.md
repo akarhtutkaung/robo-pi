@@ -1,6 +1,113 @@
-# robo-pi
+# Robo-pi
 
-Software system for an **Adeept PiCar-B Mars Rover** running on a Raspberry Pi. Built to support AI-integrated autonomous operation with camera vision, SLAM, and speech recognition — controllable over a local WebSocket connection with live WebRTC camera streaming and a full autonomous obstacle-avoidance mode.
+Custom Software system for an **Adeept PiCar-B Mars Rover** running on a Raspberry Pi. Built to support AI-integrated autonomous operation with camera vision, SLAM, and speech recognition — controllable over a local WebSocket connection with live WebRTC camera streaming and a full autonomous obstacle-avoidance mode.
+
+**Client:** [`robo-pi-client`](https://github.com/akarhtutkaung/robo-pi-client) — browser-based controller that drives the robot over WebSocket and streams the camera over WebRTC. Run the server on the Pi first, then open the client UI to connect.
+
+## Getting Started
+
+### Setup (first time on Pi)
+
+```bash
+bash setup.sh
+```
+
+This installs system dependencies (including `python3-lgpio` for accurate ultrasonic timing), creates the virtual environment, and starts the `pigpiod`-equivalent `lgpio` daemon.
+
+### Running
+
+```bash
+# Remote mode (WebSocket + WebRTC)
+./run.sh --mode remote
+
+# Autonomous mode (standalone obstacle avoidance)
+./run.sh --mode autonomous
+```
+
+`run.sh` activates the venv and passes all arguments through to `main.py`. </br>
+
+OR (manually)
+
+
+```bash
+source .venv/bin/activate
+python3 main.py --mode remote
+```
+
+### Run as a systemd service (auto-start on boot)
+
+Create `/etc/systemd/system/robo-pi.service`:
+
+```ini
+[Unit]
+Description=Robo-Pi Robot System
+After=network.target
+
+[Service]
+ExecStart=/home/akar/robo-pi/run.sh --mode remote
+WorkingDirectory=/home/akar/robo-pi
+Restart=on-failure
+User=akar
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl enable robo-pi
+sudo systemctl start robo-pi
+```
+
+## Client — robo-pi-client
+
+**Repo:** [github.com/akarhtutkaung/robo-pi-client](https://github.com/akarhtutkaung/robo-pi-client)
+
+A browser UI that connects to the Pi over WebSocket (port 8765) and streams the live camera over WebRTC (port 8766). ES modules require a local HTTP server — open with `file://` won't work.
+
+### Setup
+
+```bash
+git clone https://github.com/akarhtutkaung/robo-pi-client
+cd robo-pi-client
+bash web/run.sh
+# open http://localhost:8080
+```
+
+Enter the robot's IP address and port (default `8765`) and click **Connect**. The WebRTC camera stream starts automatically.
+
+### Manual mode
+
+Drive with WASD. Press **Q** to stop and disconnect. Commands repeat at 100 Hz while a key is held.
+
+| Key | Action |
+|-----|--------|
+| W | Forward |
+| S | Reverse |
+| A | Steer left |
+| D | Steer right |
+| I / K | Camera tilt up / down |
+| J / L | Camera pan left / right |
+| Q | Stop & disconnect |
+
+### Autonomous mode
+
+Toggle the **Manual / Autonomous** switch. The client sends `{"type":"mode","action":"autonomous"}` and displays a live HUD over the camera feed:
+
+| Element | Description |
+|---------|-------------|
+| Phase badge | `CLEAR` · `APPROACHING` · `AVOIDING` · `BLOCKED` — colour-coded; `BLOCKED` pulses |
+| Direction text | `CENTER`, `SLIGHT LEFT`, `LEFT`, `HARD LEFT` (and right variants); dimmed when confidence < 0.25 |
+| Steering gauge | Needle tracks error value (−1 left → +1 right); colour matches current phase |
+| Confidence | Percentage bottom-right |
+
+The overlay shows **WAITING** if no `drive_state` message arrives within 500 ms. Switching back to manual re-enables keyboard control.
+
+### Vision view
+
+Click **Open Debug Vision View** to open `http://<pi-ip>:8080` — the combined free-space + YOLO MJPEG stream showing passability bars and bounding boxes.
+
+---
+
 
 ## Hardware
 
@@ -20,6 +127,7 @@ Software system for an **Adeept PiCar-B Mars Rover** running on a Raspberry Pi. 
 ```
 robo-pi/
 ├── main.py                        # Entry point (--mode remote|autonomous)
+├── run.sh                         # Activates venv and runs main.py (pass --mode as args)
 ├── setup.sh                       # One-time Pi setup (apt deps + venv)
 ├── config/
 │   ├── hardware.yaml              # GPIO pins, I2C addresses, PWM settings, sensor thresholds
@@ -73,25 +181,42 @@ Both modes share the same `hardware/` drivers and `navigation/controller.py`. Yo
 
 ## Autonomous Obstacle Avoidance
 
-The autonomous loop (`src/core/modes/autonomous.py`) runs three concurrent layers of perception on every tick.
+The autonomous loop (`src/core/modes/autonomous.py`) runs at 10 Hz. Every tick the `navigate_step` dispatch checks conditions in priority order:
 
-**Phase classification** — driven by ultrasonic distance (`ObstacleDetector`):
+| Priority | Condition | Action |
+|----------|-----------|--------|
+| 1 | Forward ultrasonic blocked OR cached side distance ≤ `stop_cm` | `_handle_blocked` (forward) or `_handle_side_threat` (lateral hard-stop) |
+| 2 | Cached side distance < `warn_cm` AND YOLO confirms obstacle there | `_handle_side_threat` — steering correction, no hard stop |
+| 3 | Large in-corridor YOLO detection with clear ultrasonic (low obstacle) | `force_stop` → `_handle_blocked` |
+| 4 | Forward ultrasonic in approach zone | Slow to `approach_speed` |
+| 5 | Clear | Lateral sweep, free-space steer, full speed |
+
+**Phase thresholds** — driven by ultrasonic distance:
 
 | Phase | Condition | Behaviour |
 |-------|-----------|-----------|
-| Clear | `distance > turn_cm` | Full speed; free-space steering |
+| Clear | `distance > turn_cm` (90 cm) | Full speed; free-space steering |
 | Approaching | `stop_cm < distance ≤ turn_cm` | Slow to `approach_speed` |
-| Blocked | `distance ≤ stop_cm` | Physics-based smooth stop → avoidance |
-| Sudden stop | `distance < sudden_stop_cm` | Immediate hard cut (`force_stop`) |
+| Blocked | `distance ≤ stop_cm` (30 cm) | Physics-based smooth stop → avoidance |
+| Sudden stop | `distance < sudden_stop_cm` (20 cm) | Immediate hard cut (`force_stop`) |
 
-**Avoidance pipeline** (three layers, tried in order):
+**Clear-phase lateral sweep (`_SweepCache`)** — while driving forward, the head sweeps left → center → right (±20°) one position per tick. At each position the ultrasonic and YOLO run concurrently. The cache drives speed and early avoidance:
 
-1. **Layer 1 — YOLO** (`detect_obstacles`): capture a fresh frame after stopping; identify the primary obstacle by bounding-box area.
-2. **Layer 2 — Servo sweep** (`sweep_obstacle`): pan the head servo left, center, right; read ultrasonic distance at each position to measure clearance on both sides.
+- `any_side_blocked()` — side distance ≤ `stop_cm` → hard stop + `_handle_side_threat`
+- `should_avoid_side()` — side distance < `warn_cm` AND YOLO confirms → `_handle_side_threat` (no stop needed)
+- `yolo_blocking()` — large centered YOLO detection with clear ultrasonic → low obstacle that the beam passed over; triggers `_handle_blocked`
+- `should_slow()` — YOLO+ultrasonic inside `warn_cm`, or ultrasonic-alone < `stop_cm × 1.2`, or detection inside robot's projected corridor → reduce to `approach_speed`
+
+**Ultrasonic blind-spot:** The sensor is mounted 14 cm (5.5 in) above ground. Obstacles shorter than this return a clear reading. `yolo_blocking()` detects this case via a large in-corridor bounding box and routes into the full avoidance pipeline.
+
+**Blocked-phase avoidance pipeline** (three layers, tried in order):
+
+1. **Layer 1 — YOLO** (`detect_obstacles`): capture a fresh forward-facing frame after stopping; identify the primary obstacle by bounding-box area.
+2. **Layer 2 — Servo sweep** (`sweep_obstacle`): pan the head servo across the bounding box (left edge, center, right edge); read ultrasonic distance at each position to measure clearance.
 3. **Decide**: `decide_avoidance(width_threat, sweep)` → `TURN_LEFT` | `TURN_RIGHT` | `REVERSE_AND_TURN`.
-   - WIDE obstacle or insufficient clearance on both sides → K-turn (`REVERSE_AND_TURN`).
+   - WIDE (≥ 50% frame width, centered) → K-turn immediately.
    - NARROW → best side regardless of clearance.
-   - MEDIUM → best side only if clearance ≥ robot width + buffer.
+   - MEDIUM → best side only if clearance ≥ robot width + buffer; otherwise K-turn.
 
 **Free-space fallback** — if YOLO finds no detection or the servo sweep fails, `_free_space_avoid` runs: a confident free-space signal steers into a simple turn; low confidence → reverse straight for 2 s and reassess.
 
@@ -160,52 +285,6 @@ Three maneuvers, selected by `decide_avoidance()`:
 | `REVERSE_AND_TURN` | Read free-space to pick direction → steer → wait 0.3 s → reverse 1.5 s → stop → opposite steer → wait 0.3 s → forward 1.0 s → center → wait 0.5 s → smooth stop |
 
 All timing values are in `config/modes.yaml` (`turn_drive_s`, `kturn_*`) so they stay in sync with speed settings.
-
-## Getting Started
-
-### Setup (first time on Pi)
-
-```bash
-bash setup.sh
-```
-
-This installs system dependencies (including `python3-lgpio` for accurate ultrasonic timing), creates the virtual environment, and starts the `pigpiod`-equivalent `lgpio` daemon.
-
-### Running
-
-```bash
-source .venv/bin/activate
-
-# Remote mode (WebSocket + WebRTC)
-python3 main.py --mode remote
-
-# Autonomous mode (standalone obstacle avoidance)
-python3 main.py --mode autonomous
-```
-
-### Run as a systemd service (auto-start on boot)
-
-Create `/etc/systemd/system/robo-pi.service`:
-
-```ini
-[Unit]
-Description=Robo-Pi Robot System
-After=network.target
-
-[Service]
-ExecStart=/home/akar/robo-pi/.venv/bin/python3 /home/akar/robo-pi/main.py
-WorkingDirectory=/home/akar/robo-pi
-Restart=on-failure
-User=akar
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl enable robo-pi
-sudo systemctl start robo-pi
-```
 
 ## Ports
 
@@ -305,6 +384,7 @@ Key ultrasonic thresholds:
 
 | Key | Default | Description |
 |-----|---------|-------------|
+| `height_cm` | 14 | Sensor mount height above ground (5.5 in) — obstacles shorter than this pass under the beam |
 | `turn_cm` | 90 | Distance to start slowing down |
 | `stop_cm` | 30 | Distance to trigger stop maneuver |
 | `sudden_stop_cm` | 20 | Distance for immediate hard stop |
@@ -321,6 +401,9 @@ Key ultrasonic thresholds:
 | `kturn_reverse_s` | 1.5 | Reverse duration in K-turn |
 | `kturn_forward_s` | 1.0 | Forward duration in K-turn |
 | `kturn_final_settle_s` | 0.5 | Settle pause before final smooth stop in K-turn |
+| `sweep_angle_deg` | 20 | Head angle (degrees) for left/right clear-phase sweep positions |
+| `warn_cm` | 60 | YOLO + ultrasonic early-warning distance — reduces speed to `approach_speed` |
+| `yolo_block_ratio` | 0.25 | Minimum bounding-box width fraction to trigger YOLO-only avoidance for low obstacles |
 
 ### Calibrating `cm_per_speed_unit`
 
