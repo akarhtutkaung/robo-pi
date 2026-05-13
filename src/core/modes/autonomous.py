@@ -20,6 +20,7 @@ drive_state message format:
 import asyncio
 import json
 import logging
+import math
 
 from websockets.exceptions import ConnectionClosed
 
@@ -91,6 +92,10 @@ _SWEEP_POSITIONS: list[tuple[str, int]] = [
     ("right",  int(max(_SERVO1_MIN, round(_SERVO1_CENTER - _SWEEP_ANGLE_DEG)))),
 ]
 
+# At sweep angle θ, a side reading d has lateral offset d·sin(θ). Below this distance
+# that offset is less than the robot's half-width → obstacle is inside the body corridor.
+_SWEEP_SIDE_CORRIDOR_CM = (_ROBOT_WIDTH_CM / 2.0) / math.sin(math.radians(_SWEEP_ANGLE_DEG))
+
 
 class _SweepCache:
     """Rotating 3-position sensor cache for the clear phase.
@@ -121,10 +126,11 @@ class _SweepCache:
     def should_slow(self) -> bool:
         """True if sweep data suggests slowing is warranted.
 
-        Two independent conditions either of which triggers slow:
-        - YOLO + ultrasonic both agree on an obstacle inside warn_cm (normal case)
-        - Ultrasonic alone reads < stop_cm * 1.5 (≈45 cm) — catches dark / novel
-          objects that YOLO misses but the ultrasonic still measures.
+        Conditions (any one triggers slow):
+        - YOLO + ultrasonic both agree on obstacle inside warn_cm (normal case)
+        - Ultrasonic alone < stop_cm × 1.5 — catches dark/novel objects YOLO misses
+        - in_corridor()     — YOLO sees obstacle in robot's body corridor, ultrasonic missed
+        - side_in_corridor() — side geometry: obstacle in body path, YOLO also missed
         """
         _ultrasonic_slow_cm = _STOP_CM * 1.5
         for name, dist in self.distances.items():
@@ -133,6 +139,39 @@ class _SweepCache:
             if dist < _WARN_CM and self.detections[name]:
                 return True
             if dist < _ultrasonic_slow_cm:
+                return True
+        if self.in_corridor():
+            return True
+        if self.side_in_corridor():
+            return True
+        return False
+
+    def in_corridor(self, frame_width: int = _FRAME_W) -> bool:
+        """True if any center-frame YOLO detection overlaps the robot's projected body width.
+
+        Uses the pinhole model: at center distance d, the robot's half-width in pixels is
+        (robot_half_width_cm × focal_length_px) / d. Any detection whose x-range overlaps
+        [cx − half_w_px, cx + half_w_px] is within the robot's physical path.
+        Only meaningful after the center tick has been processed.
+        """
+        dets = self.detections["center"]
+        dist = self.distances["center"]
+        if not dets or not dist or dist <= 0:
+            return False
+        half_w_px = (_ROBOT_WIDTH_CM / 2.0 * _FOCAL_LENGTH_PX) / max(dist, 10.0)
+        cx = frame_width / 2.0
+        return any(d["x1"] < cx + half_w_px and d["x2"] > cx - half_w_px for d in dets)
+
+    def side_in_corridor(self) -> bool:
+        """True if any side-sweep ultrasonic reading places an obstacle inside the robot's body.
+
+        At sweep angle θ, a distance d gives lateral offset d·sin(θ). When that is less than
+        the robot's half-width the obstacle is geometrically within the collision corridor —
+        catches dark/novel objects that neither YOLO nor the center ultrasonic detects.
+        """
+        for name in ("left", "right"):
+            d = self.distances[name]
+            if d is not None and 0 < d < _SWEEP_SIDE_CORRIDOR_CM:
                 return True
         return False
 

@@ -24,6 +24,10 @@ from src.core.modes.autonomous import (
     _STOP_CM,
     _WARN_CM,
     _SWEEP_POSITIONS,
+    _FOCAL_LENGTH_PX,
+    _ROBOT_WIDTH_CM,
+    _SWEEP_SIDE_CORRIDOR_CM,
+    _FRAME_W,
 )
 
 
@@ -312,8 +316,10 @@ class TestNavigateStep:
         auto_mod.capture_bgr      = lambda cam: _blank_frame()
         auto_mod.detect           = lambda f: (0.0, 0.1)  # below MIN_CONFIDENCE
         auto_mod.detect_obstacles = lambda f: []
+        cache = self._cache()
+        cache._idx = 1  # force center tick so free-space/steer path runs
 
-        _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws, self._cache()))
+        _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws, cache))
 
         assert ("steer_center",) in ctrl.calls
 
@@ -360,8 +366,10 @@ class TestNavigateStep:
         assert ("forward", APPROACH_SPEED) in ctrl.calls
 
     def test_clear_full_speed_when_no_yolo(self):
-        """YOLO returns nothing → AUTONOMOUS_SPEED even if distance is in warn zone."""
-        obs  = _Obstacle(sensor_dist=40.0)
+        """YOLO returns nothing → AUTONOMOUS_SPEED when distance is above all slow thresholds."""
+        # 50 cm: inside warn_cm (60) but above ultrasonic-alone threshold (stop_cm*1.5 ≈ 45)
+        # and above side corridor threshold (~29 cm) → no slow condition fires
+        obs  = _Obstacle(sensor_dist=50.0)
         ctrl = _Controller()
         ws   = _WS()
         auto_mod.capture_bgr      = lambda cam: _blank_frame()
@@ -482,3 +490,85 @@ class TestNavigateStep:
 
         # force_stop must have been called (sudden stop path)
         assert ("force_stop",) in ctrl.calls
+
+
+# ---------------------------------------------------------------------------
+# _SweepCache corridor checks — in_corridor() and side_in_corridor()
+# ---------------------------------------------------------------------------
+
+class TestSweepCacheCorridor:
+
+    def _det_in(self, dist: float = 100.0) -> dict:
+        """Detection centred on the frame, guaranteed inside the robot corridor at dist."""
+        half_w = _ROBOT_WIDTH_CM / 2.0 * _FOCAL_LENGTH_PX / max(dist, 10.0)
+        cx = _FRAME_W / 2.0
+        return {"x1": int(cx - half_w + 1), "y1": 0,
+                "x2": int(cx + half_w - 1), "y2": 100,
+                "conf": 0.8, "class_id": 0}
+
+    def _det_out(self, dist: float = 100.0) -> dict:
+        """Detection entirely to the left of the robot corridor at dist."""
+        half_w = _ROBOT_WIDTH_CM / 2.0 * _FOCAL_LENGTH_PX / max(dist, 10.0)
+        cx = _FRAME_W / 2.0
+        return {"x1": 0, "y1": 0,
+                "x2": int(cx - half_w - 5), "y2": 100,
+                "conf": 0.8, "class_id": 0}
+
+    def test_in_corridor_true_when_detection_overlaps(self):
+        cache = _SweepCache()
+        cache.distances["center"]  = 100.0
+        cache.detections["center"] = [self._det_in(100.0)]
+        assert cache.in_corridor()
+
+    def test_in_corridor_false_detection_outside_corridor(self):
+        cache = _SweepCache()
+        cache.distances["center"]  = 100.0
+        cache.detections["center"] = [self._det_out(100.0)]
+        assert not cache.in_corridor()
+
+    def test_in_corridor_false_no_detections(self):
+        cache = _SweepCache()
+        cache.distances["center"]  = 100.0
+        cache.detections["center"] = []
+        assert not cache.in_corridor()
+
+    def test_in_corridor_false_center_dist_none(self):
+        cache = _SweepCache()
+        cache.distances["center"]  = None
+        cache.detections["center"] = [self._det_in(100.0)]
+        assert not cache.in_corridor()
+
+    def test_side_in_corridor_true_left_inside_threshold(self):
+        cache = _SweepCache()
+        cache.distances["left"] = _SWEEP_SIDE_CORRIDOR_CM - 1.0
+        assert cache.side_in_corridor()
+
+    def test_side_in_corridor_true_right_inside_threshold(self):
+        cache = _SweepCache()
+        cache.distances["right"] = _SWEEP_SIDE_CORRIDOR_CM - 1.0
+        assert cache.side_in_corridor()
+
+    def test_side_in_corridor_false_outside_threshold(self):
+        cache = _SweepCache()
+        cache.distances["left"]  = _SWEEP_SIDE_CORRIDOR_CM + 10.0
+        cache.distances["right"] = _SWEEP_SIDE_CORRIDOR_CM + 10.0
+        assert not cache.side_in_corridor()
+
+    def test_side_in_corridor_false_all_none(self):
+        assert not _SweepCache().side_in_corridor()
+
+    def test_should_slow_true_via_in_corridor(self):
+        """YOLO detection in robot corridor triggers slow even when ultrasonic sees nothing close."""
+        dist = _WARN_CM + 20.0   # well outside both warn_cm and stop_cm*1.5 thresholds
+        cache = _SweepCache()
+        cache.distances["center"]  = dist
+        cache.detections["center"] = [self._det_in(dist)]
+        assert cache.should_slow()
+
+    def test_should_slow_false_yolo_outside_corridor_far_dist(self):
+        """Detection outside the physical corridor at a far distance must not trigger slow."""
+        dist = _WARN_CM + 20.0
+        cache = _SweepCache()
+        cache.distances["center"]  = dist
+        cache.detections["center"] = [self._det_out(dist)]
+        assert not cache.should_slow()

@@ -28,4 +28,3 @@
 ## Microphone
 - [ ] Instead of controlling from pc, control the auto drive via microphone
 - [ ] Speech recognization and turn the head directly to where it was calling, then mark the possible location. Then move to that location.
-- [ ]
