@@ -17,3 +17,4 @@ autonomous:
   # Clear-phase lateral sweep
   sweep_angle_deg: 20  # degrees either side of centre for background sweep
   warn_cm: 60          # slow to approach_speed if YOLO+ultrasonic confirm obstacle within this range
+  yolo_block_ratio: 0.25  # min bounding-box width fraction to trigger YOLO-only avoidance for low obstacles

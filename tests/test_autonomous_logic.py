@@ -28,6 +28,7 @@ from src.core.modes.autonomous import (
     _ROBOT_WIDTH_CM,
     _SWEEP_SIDE_CORRIDOR_CM,
     _FRAME_W,
+    _YOLO_BLOCK_RATIO,
 )
 
 
@@ -736,3 +737,199 @@ class TestNavigateStepSideAvoid:
         _run(auto_mod.navigate_step(_Controller(), obs, _Camera(), ws, _SweepCache()))
 
         assert "avoiding" not in ws.phases()
+
+
+# ---------------------------------------------------------------------------
+# _SweepCache.yolo_blocking — YOLO-only low-obstacle detection
+# ---------------------------------------------------------------------------
+
+def _wide_centered_det() -> dict:
+    """Width >= _YOLO_BLOCK_RATIO * _FRAME_W, perfectly centred on the frame."""
+    width = int(_YOLO_BLOCK_RATIO * _FRAME_W) + 10
+    cx = _FRAME_W // 2
+    hw = width // 2
+    return {"x1": cx - hw, "y1": 50, "x2": cx + hw, "y2": 250, "conf": 0.85, "class_id": 0}
+
+
+def _narrow_det() -> dict:
+    """Width just below _YOLO_BLOCK_RATIO * _FRAME_W, centred on the frame."""
+    width = max(1, int(_YOLO_BLOCK_RATIO * _FRAME_W) - 10)
+    cx = _FRAME_W // 2
+    hw = width // 2
+    return {"x1": cx - hw, "y1": 50, "x2": cx + hw, "y2": 250, "conf": 0.85, "class_id": 0}
+
+
+def _offcenter_wide_det() -> dict:
+    """Wide detection placed entirely to the right of the robot corridor."""
+    half_w_px = (_ROBOT_WIDTH_CM / 2.0 * _FOCAL_LENGTH_PX) / _STOP_CM
+    cx = _FRAME_W / 2.0
+    x1 = int(cx + half_w_px) + 5   # starts just outside corridor right edge
+    width = int(_YOLO_BLOCK_RATIO * _FRAME_W) + 10
+    return {"x1": x1, "y1": 50, "x2": x1 + width, "y2": 250, "conf": 0.85, "class_id": 0}
+
+
+class TestSweepCacheYoloBlocking:
+
+    def test_false_initially(self):
+        assert not _SweepCache().yolo_blocking()
+
+    def test_false_no_center_detections(self):
+        cache = _SweepCache()
+        cache.distances["center"]  = 200.0
+        cache.detections["center"] = []
+        assert not cache.yolo_blocking()
+
+    def test_false_dist_none(self):
+        cache = _SweepCache()
+        cache.distances["center"]  = None
+        cache.detections["center"] = [_wide_centered_det()]
+        assert not cache.yolo_blocking()
+
+    def test_false_when_ultrasonic_in_approach_zone(self):
+        """Guard: dist < warn_cm → normal ultrasonic path owns this range."""
+        cache = _SweepCache()
+        cache.distances["center"]  = _WARN_CM - 1
+        cache.detections["center"] = [_wide_centered_det()]
+        assert not cache.yolo_blocking()
+
+    def test_true_at_exact_warn_boundary(self):
+        """Guard is strictly <, so dist == warn_cm does NOT trigger the guard → True."""
+        cache = _SweepCache()
+        cache.distances["center"]  = float(_WARN_CM)
+        cache.detections["center"] = [_wide_centered_det()]
+        assert cache.yolo_blocking()
+
+    def test_false_detection_too_narrow(self):
+        cache = _SweepCache()
+        cache.distances["center"]  = 200.0
+        cache.detections["center"] = [_narrow_det()]
+        assert not cache.yolo_blocking()
+
+    def test_false_detection_outside_corridor(self):
+        cache = _SweepCache()
+        cache.distances["center"]  = 200.0
+        cache.detections["center"] = [_offcenter_wide_det()]
+        assert not cache.yolo_blocking()
+
+    def test_true_wide_detection_in_corridor_with_clear_ultrasonic(self):
+        """Canonical scenario: low obstacle invisible to beam, YOLO sees large centered box."""
+        cache = _SweepCache()
+        cache.distances["center"]  = 200.0
+        cache.detections["center"] = [_wide_centered_det()]
+        assert cache.yolo_blocking()
+
+    def test_true_multiple_dets_one_qualifies(self):
+        """One qualifying detection among several is sufficient."""
+        cache = _SweepCache()
+        cache.distances["center"]  = 200.0
+        cache.detections["center"] = [_narrow_det(), _offcenter_wide_det(), _wide_centered_det()]
+        assert cache.yolo_blocking()
+
+    def test_false_only_side_dets_populated(self):
+        """Only side positions have detections; center is empty → False."""
+        cache = _SweepCache()
+        cache.distances["left"]    = 200.0
+        cache.detections["left"]   = [_wide_centered_det()]
+        cache.distances["center"]  = 200.0
+        cache.detections["center"] = []
+        assert not cache.yolo_blocking()
+
+
+# ---------------------------------------------------------------------------
+# navigate_step — yolo_blocking path
+# ---------------------------------------------------------------------------
+
+class TestNavigateStepYoloBlocking:
+    """navigate_step must route low-obstacle detection through force_stop + _handle_blocked."""
+
+    @pytest.fixture(autouse=True)
+    def restore_module_attrs(self):
+        originals = {
+            "capture_bgr":       auto_mod.capture_bgr,
+            "detect":            auto_mod.detect,
+            "detect_obstacles":  auto_mod.detect_obstacles,
+            "sweep_obstacle":    auto_mod.sweep_obstacle,
+            "execute_avoidance": auto_mod.execute_avoidance,
+        }
+        yield
+        for name, val in originals.items():
+            setattr(auto_mod, name, val)
+
+    def _armed_cache(self):
+        """Cache with a clear center ultrasonic reading and a wide centered YOLO detection."""
+        cache = _SweepCache()
+        cache.distances["center"]  = 200.0
+        cache.detections["center"] = [_wide_centered_det()]
+        return cache
+
+    def _stub_blocked_path(self):
+        """Stub the YOLO+sweep path inside _handle_blocked to run without I/O or delays."""
+        auto_mod.capture_bgr      = lambda cam: _blank_frame()
+        auto_mod.detect_obstacles = lambda f: [_wide_centered_det()]
+        auto_mod.sweep_obstacle   = lambda c, s, l, r: {"left": 60.0, "center": 200.0, "right": 60.0}
+        auto_mod.execute_avoidance = lambda c, cam, dec: asyncio.sleep(0)
+
+    def test_yolo_blocking_calls_force_stop(self):
+        self._stub_blocked_path()
+        ctrl = _Controller()
+
+        _run(auto_mod.navigate_step(ctrl, _Obstacle(), _Camera(), _WS(), self._armed_cache()))
+
+        assert ("force_stop",) in ctrl.calls
+
+    def test_yolo_blocking_recentres_head_before_blocked(self):
+        """Head must be re-centred after force_stop so _handle_blocked captures a forward frame."""
+        self._stub_blocked_path()
+        ctrl = _Controller()
+
+        _run(auto_mod.navigate_step(ctrl, _Obstacle(), _Camera(), _WS(), self._armed_cache()))
+
+        head_moves = [c for c in ctrl.calls if c[0] == "move_camera_to"]
+        assert head_moves, "move_camera_to not called to re-centre head"
+        # force_stop must come before the head move
+        fs_idx   = next(i for i, c in enumerate(ctrl.calls) if c[0] == "force_stop")
+        head_idx = next(i for i, c in enumerate(ctrl.calls) if c[0] == "move_camera_to")
+        assert fs_idx < head_idx, "force_stop must precede move_camera_to"
+
+    def test_yolo_blocking_sends_avoiding_phase(self):
+        self._stub_blocked_path()
+        ws = _WS()
+
+        _run(auto_mod.navigate_step(_Controller(), _Obstacle(), _Camera(), ws, self._armed_cache()))
+
+        assert "avoiding" in ws.phases()
+
+    def test_yolo_blocking_cache_invalidated_after_avoidance(self):
+        self._stub_blocked_path()
+        cache = self._armed_cache()
+
+        _run(auto_mod.navigate_step(_Controller(), _Obstacle(), _Camera(), _WS(), cache))
+
+        assert all(v is None for v in cache.distances.values())
+
+    def test_yolo_blocking_does_not_fire_when_ultrasonic_in_approach_zone(self):
+        """Center dist < warn_cm → yolo_blocking guard fires; should_turn takes priority."""
+        self._stub_blocked_path()
+        cache = _SweepCache()
+        cache.distances["center"]  = _WARN_CM - 10
+        cache.detections["center"] = [_wide_centered_det()]
+        obs = _Obstacle(turn=True)
+        ws  = _WS()
+
+        _run(auto_mod.navigate_step(_Controller(), obs, _Camera(), ws, cache))
+
+        assert ws.phases()[-1] == "approaching"
+
+    def test_yolo_blocking_does_not_fire_when_detection_narrow(self):
+        """Narrow detection → yolo_blocking() False → falls through to clear phase."""
+        auto_mod.capture_bgr      = lambda cam: _blank_frame()
+        auto_mod.detect           = lambda f: (0.0, 0.6)
+        auto_mod.detect_obstacles = lambda f: []
+        cache = _SweepCache()
+        cache.distances["center"]  = 200.0
+        cache.detections["center"] = [_narrow_det()]
+        ws = _WS()
+
+        _run(auto_mod.navigate_step(_Controller(), _Obstacle(), _Camera(), ws, cache))
+
+        assert ws.phases()[-1] == "clear"

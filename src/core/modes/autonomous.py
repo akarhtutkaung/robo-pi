@@ -82,7 +82,17 @@ _SERVO1_MIN      = SERVO_CFG["servo1"]["max_angle"]     # 0   — full right
 _SERVO1_MAX      = SERVO_CFG["servo1"]["min_angle"]     # 180 — full left
 _SWEEP_ANGLE_DEG = AUTONOMOUS_CFG["sweep_angle_deg"]
 _WARN_CM         = AUTONOMOUS_CFG["warn_cm"]
-_STOP_CM         = ULTRASONIC_CFG["stop_cm"]
+_STOP_CM              = ULTRASONIC_CFG["stop_cm"]
+_ULTRASONIC_HEIGHT_CM = ULTRASONIC_CFG["height_cm"]  # 14 cm — obstacles shorter than this pass under the beam
+
+# Geometric lower bound for the YOLO-only blocking threshold: at stop_cm, an obstacle as wide
+# as the sensor height projects this fraction of the frame. The configured ratio may be larger
+# (tighter), but must never fall below this minimum or distant detectable objects cause false triggers.
+_YOLO_BLOCK_RATIO = max(
+    AUTONOMOUS_CFG["yolo_block_ratio"],
+    (_ULTRASONIC_HEIGHT_CM * _FOCAL_LENGTH_PX) / (_STOP_CM * _FRAME_W),
+)
+
 _HEAD_SETTLE_S   = 0.15  # seconds — covers 80-120 ms servo travel + camera pipeline latency
 
 # (name, servo1 angle) triples traversed left → centre → right each tick cycle
@@ -195,6 +205,30 @@ class _SweepCache:
             d = self.distances[name]
             if d is not None and d < _WARN_CM and self.detections[name]:
                 return True
+        return False
+
+    def yolo_blocking(self) -> bool:
+        """True when a large in-corridor YOLO detection indicates a low obstacle the ultrasonic missed.
+
+        The sensor at _ULTRASONIC_HEIGHT_CM passes over obstacles shorter than itself, returning
+        a clear ultrasonic reading while YOLO sees a large bounding box. Guard: only fires when
+        ultrasonic reads >= warn_cm so the normal is_blocked()/should_turn() paths are not bypassed.
+
+        Corridor width is computed at stop_cm rather than the (unreliable) ultrasonic distance to
+        give a conservative check appropriate for an obstacle assumed to be close.
+        """
+        dets = self.detections["center"]
+        dist = self.distances["center"]
+        if not dets or dist is None:
+            return False
+        if dist < _WARN_CM:
+            return False   # normal ultrasonic path owns this distance range
+        half_w_px = (_ROBOT_WIDTH_CM / 2.0 * _FOCAL_LENGTH_PX) / _STOP_CM
+        cx = _FRAME_W / 2.0
+        for det in dets:
+            if (det["x2"] - det["x1"]) / _FRAME_W >= _YOLO_BLOCK_RATIO:
+                if det["x1"] < cx + half_w_px and det["x2"] > cx - half_w_px:
+                    return True
         return False
 
     def invalidate(self):
@@ -518,6 +552,14 @@ async def _handle_side_threat(controller, camera, websocket, sweep_cache):
 
 async def setup(controller):
     controller.center_camera()
+    geometric_floor = (_ULTRASONIC_HEIGHT_CM * _FOCAL_LENGTH_PX) / (_STOP_CM * _FRAME_W)
+    log.info(
+        "Autonomous: ultrasonic blind-spot < %.0f cm; "
+        "YOLO-only avoidance ratio %.2f (geometric floor %.3f).",
+        _ULTRASONIC_HEIGHT_CM,
+        _YOLO_BLOCK_RATIO,
+        geometric_floor,
+    )
 
 
 async def navigate_step(controller, obstacle, camera, websocket, sweep_cache):
@@ -540,6 +582,17 @@ async def navigate_step(controller, obstacle, camera, websocket, sweep_cache):
         # ultrasonic may read clear; its deceleration logic and YOLO sweep target
         # the wrong axis for a side threat.
         await _handle_side_threat(controller, camera, websocket, sweep_cache)
+    elif sweep_cache.yolo_blocking():
+        # Low obstacle: ultrasonic beam passed over it (obstacle shorter than
+        # _ULTRASONIC_HEIGHT_CM), but YOLO sees a large in-corridor detection with
+        # a clear ultrasonic reading. Re-centre the head before capturing the blocked
+        # frame — bounding box pixel coordinates fed into sweep_obstacle assume the
+        # camera is forward-facing; an angled frame produces wrong sweep angles.
+        controller.force_stop()
+        controller.move_camera_to("x", int(round(_SERVO1_CENTER)))
+        await asyncio.sleep(_HEAD_SETTLE_S)
+        await _handle_blocked(controller, obstacle, camera, websocket)
+        sweep_cache.invalidate()
     elif obstacle.should_turn():
         await _handle_approaching(controller, websocket)
     else:

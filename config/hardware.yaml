@@ -72,6 +72,7 @@ ultrasonic:
   trigger_pin: 23
   echo_pin: 24
   max_distance: 2   # Maximum distance to measure in m (adjust based on sensor specs)
+  height_cm: 14     # Sensor mount height above ground (5.5 in) — obstacles shorter than this are invisible to the beam
   stop_cm: 30       # Distance at which to stop
   turn_cm: 90       # Distance at which to start slowing down
   sudden_stop_cm: 20  # Distance at which to hard-stop immediately (must be < stop_cm)
