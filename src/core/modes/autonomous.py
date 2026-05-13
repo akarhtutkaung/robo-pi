@@ -119,11 +119,22 @@ class _SweepCache:
         return any(d is not None and d <= _STOP_CM for d in self.distances.values())
 
     def should_slow(self) -> bool:
-        """True if YOLO + ultrasonic agree an obstacle is in the warning zone."""
-        return any(
-            d is not None and d < _WARN_CM and bool(self.detections[name])
-            for name, d in self.distances.items()
-        )
+        """True if sweep data suggests slowing is warranted.
+
+        Two independent conditions either of which triggers slow:
+        - YOLO + ultrasonic both agree on an obstacle inside warn_cm (normal case)
+        - Ultrasonic alone reads < stop_cm * 1.5 (≈45 cm) — catches dark / novel
+          objects that YOLO misses but the ultrasonic still measures.
+        """
+        _ultrasonic_slow_cm = _STOP_CM * 1.5
+        for name, dist in self.distances.items():
+            if dist is None:
+                continue
+            if dist < _WARN_CM and self.detections[name]:
+                return True
+            if dist < _ultrasonic_slow_cm:
+                return True
+        return False
 
 
 # ---------------------------------------------------------------------------

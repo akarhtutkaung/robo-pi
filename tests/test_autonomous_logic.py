@@ -218,13 +218,22 @@ class TestSweepCache:
         cache.detections["left"] = [{"x1": 0, "y1": 0, "x2": 100, "y2": 100}]
         assert cache.should_slow()
 
-    def test_should_slow_false_without_yolo(self):
+    def test_should_slow_no_yolo_but_above_ultrasonic_threshold(self):
+        # _WARN_CM - 10 = 50 cm; ultrasonic-only threshold = _STOP_CM * 1.5 = 45 cm
+        # 50 > 45 → YOLO required at this distance; no YOLO → no slow
         cache = _SweepCache()
-        cache.distances["right"] = _WARN_CM - 10   # inside warn zone
-        cache.detections["right"] = []              # no YOLO → no slow
+        cache.distances["right"] = _WARN_CM - 10
+        cache.detections["right"] = []
         assert not cache.should_slow()
 
-    def test_should_slow_false_outside_warn_zone(self):
+    def test_should_slow_ultrasonic_alone_triggers_below_threshold(self):
+        # Any distance < stop_cm * 1.5 slows even without YOLO (dark/novel objects)
+        cache = _SweepCache()
+        cache.distances["left"] = _STOP_CM * 1.5 - 1   # just inside threshold
+        cache.detections["left"] = []
+        assert cache.should_slow()
+
+    def test_should_slow_false_outside_both_thresholds(self):
         cache = _SweepCache()
         cache.distances["center"] = _WARN_CM + 10  # outside warn zone
         cache.detections["center"] = [{"x1": 0, "y1": 0, "x2": 100, "y2": 100}]
