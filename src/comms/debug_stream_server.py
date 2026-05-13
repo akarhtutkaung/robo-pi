@@ -21,18 +21,31 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from src.perception.camera import capture_bgr
 from src.perception.vision.free_space import detect, draw_debug
-from src.perception.vision.object_detection import detect_obstacles, draw_detections
+from src.perception.vision.object_detection import (
+    detect_obstacles, draw_detections, STOP_CM, TURN_CM,
+)
 
 _JPEG_QUALITY = 75
 
 
-def _capture_and_encode(camera) -> bytes:
+def _capture_and_encode(camera, obstacle) -> bytes:
     frame       = capture_bgr(camera)
     error, conf = detect(frame)
     vis         = draw_debug(frame, error, conf)   # free-space overlay (returns copy)
     detections  = detect_obstacles(frame)
     draw_detections(vis, detections)               # YOLO boxes on top (in-place)
-    _, jpg      = cv2.imencode(".jpg", vis, [cv2.IMWRITE_JPEG_QUALITY, _JPEG_QUALITY])
+
+    dist_cm = obstacle.distance_cm()
+    if dist_cm <= STOP_CM:
+        colour = (0, 0, 255)    # red   — blocked
+    elif dist_cm <= TURN_CM:
+        colour = (0, 165, 255)  # orange — approaching
+    else:
+        colour = (0, 255, 0)    # green  — clear
+    cv2.putText(vis, f"{dist_cm:.1f} cm",
+                (6, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.55, colour, 1, cv2.LINE_AA)
+
+    _, jpg = cv2.imencode(".jpg", vis, [cv2.IMWRITE_JPEG_QUALITY, _JPEG_QUALITY])
     return jpg.tobytes()
 
 
@@ -66,7 +79,7 @@ def _make_handler(shared: dict, lock: threading.Lock, fps: int):
     return _Handler
 
 
-async def run_debug_stream(camera, port: int = 8080, fps: int = 10):
+async def run_debug_stream(camera, obstacle, port: int = 8080, fps: int = 10):
     """Async task — starts the MJPEG HTTP server and continuously updates
     the frame buffer. Runs until cancelled alongside the other servers.
     """
@@ -81,7 +94,7 @@ async def run_debug_stream(camera, port: int = 8080, fps: int = 10):
     sleep = 1.0 / fps
     try:
         while True:
-            jpg = await loop.run_in_executor(None, _capture_and_encode, camera)
+            jpg = await loop.run_in_executor(None, _capture_and_encode, camera, obstacle)
             with lock:
                 shared["jpg"] = jpg
             await asyncio.sleep(sleep)

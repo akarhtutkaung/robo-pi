@@ -17,10 +17,12 @@ from src.navigation.controller import RobotController
 from src.comms.webrtc_server import start_webrtc_server
 from src.comms.debug_stream_server import run_debug_stream
 from src.perception.camera import make_camera, CameraSwitch
+from src.perception.vision.object_detection import ObstacleDetector
 from src.core.config import CAMERA_CFG, DEBUG_STREAM_CFG
 
 def run():
     controller = RobotController()
+    obstacle   = ObstacleDetector()
 
     fc = CAMERA_CFG["front"]
     bc = CAMERA_CFG["back"]
@@ -39,6 +41,7 @@ def run():
         if not cleaned_up:
             cleaned_up = True
             controller.cleanup()
+            obstacle.cleanup()
             cameras.stop()
         raise SystemExit(0)
 
@@ -52,6 +55,7 @@ def run():
             if DEBUG_STREAM_CFG.get("enabled", False):
                 tasks.append(run_debug_stream(
                     cameras,
+                    obstacle,
                     port=DEBUG_STREAM_CFG.get("port", 8080),
                     fps=DEBUG_STREAM_CFG.get("fps", 10),
                 ))
@@ -63,5 +67,6 @@ def run():
         if not cleaned_up:
             cleaned_up = True
             controller.cleanup()
+            obstacle.cleanup()
             cameras.stop()
         print("Robot stopped safely.")
