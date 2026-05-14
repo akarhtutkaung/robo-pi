@@ -21,6 +21,7 @@ SERVO_CFG             = _hw["servos"]             # servo0/1/2 channels and angl
 WS_CFG                = _hw["websocket"]          # host and port
 WEBRTC_CFG            = _hw["webrtc"]             # host and port for WebRTC signaling WS
 ULTRASONIC_CFG        = _hw["ultrasonic"]         # trigger and echo pins
+ULTRASONIC_REAR_CFG   = _hw.get("ultrasonic_rear", {})  # rear sensor — empty dict when not in config
 CAMERA_CFG            = _hw["cameras"]            # front/back index and resolution
 DEBUG_STREAM_CFG      = _hw["debug_stream"]       # enabled, port, fps
 OBSTACLE_AVOIDANCE_CFG = _hw["obstacle_avoidance"] # robot_width_cm, clearance_buffer_cm, focal_length_px, camera_hfov_deg

@@ -13,6 +13,9 @@ autonomous:
   kturn_reverse_s: 1.5       # reverse duration in K-turn
   kturn_forward_s: 1.0       # forward duration in K-turn
   kturn_final_settle_s: 0.5  # settle pause before final smooth_stop
+  reverse_fallback_s: 2.0    # max straight-reverse duration in free-space fallback; stops early when rear sensor fires
+                              # distance estimate: reverse_speed × cm_per_speed_unit × t = 4 × 1.2 × 2.0 ≈ 9.6 cm
+                              # increase if the robot is not escaping the blocked zone reliably
 
   # Clear-phase lateral sweep
   sweep_angle_deg: 20  # degrees either side of centre for background sweep

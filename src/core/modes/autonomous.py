@@ -30,9 +30,15 @@ from src.perception.vision.object_detection import (
     sweep_obstacle, calculate_real_width,
 )
 from src.perception.camera import capture_bgr
-from src.core.config import MOTOR_CFG, AUTONOMOUS_CFG, SERVO_CFG, OBSTACLE_AVOIDANCE_CFG, ULTRASONIC_CFG
+from src.core.config import MOTOR_CFG, AUTONOMOUS_CFG, SERVO_CFG, OBSTACLE_AVOIDANCE_CFG, ULTRASONIC_CFG, ULTRASONIC_REAR_CFG
+from src.hardware.sensors.ultrasonic import UltrasonicSensor
 
 log = logging.getLogger(__name__)
+
+
+class _WedgeError(RuntimeError):
+    """Robot is confirmed wedged (front and rear both blocked). Triggers immediate halt."""
+
 
 _FOCAL_LENGTH_PX    = OBSTACLE_AVOIDANCE_CFG["focal_length_px"]
 
@@ -47,6 +53,8 @@ _KTURN_STEER_SETTLE_S = AUTONOMOUS_CFG["kturn_steer_settle_s"]
 _KTURN_REVERSE_S      = AUTONOMOUS_CFG["kturn_reverse_s"]
 _KTURN_FORWARD_S      = AUTONOMOUS_CFG["kturn_forward_s"]
 _KTURN_FINAL_SETTLE_S = AUTONOMOUS_CFG["kturn_final_settle_s"]
+_REVERSE_FALLBACK_S   = AUTONOMOUS_CFG["reverse_fallback_s"]
+_REAR_STOP_CM         = ULTRASONIC_REAR_CFG.get("stop_cm", 20)
 _STOP_TARGET_MARGIN = 5.0   # cm — target stop distance in front of obstacle
 _MIN_DECEL_DIST_CM  = 1.0   # lower bound on d_target; prevents ÷0 in decel formula
 
@@ -307,13 +315,69 @@ async def _send(websocket, phase: str, error: float = 0.0, confidence: float = 0
 # Avoidance maneuvers
 # ---------------------------------------------------------------------------
 
-async def execute_avoidance(controller, camera, decision: str):
+async def _reverse_with_obstacle_check(controller, rear_sensor, max_s: float) -> bool:
+    """Start reversing and stop early if the rear ultrasonic detects an obstacle.
+
+    Performs a pre-move clearance check before engaging the motor: if the rear sensor
+    already reads ≤ _REAR_STOP_CM, the reverse is skipped entirely.
+
+    When rear_sensor is None (not yet installed), falls back to a plain timed reverse.
+
+    Returns True  — reverse ran the full duration; caller may continue the manoeuvre.
+    Returns False — reverse was skipped (no pre-move clearance) or cut short by a
+                    rear obstacle; caller must NOT proceed with the forward phase.
+
+    Calls smooth_stop() before returning in all cases.
+    Caller must hold camera.reverse_cam() context.
+    """
+    loop = asyncio.get_running_loop()
+
+    if rear_sensor is not None:
+        try:
+            initial = await loop.run_in_executor(None, rear_sensor.distance_cm)
+            if initial <= _REAR_STOP_CM:
+                log.warning(
+                    "Insufficient rear clearance (%.1f cm) — skipping reverse.", initial
+                )
+                return False
+        except Exception:
+            log.exception("Rear pre-check failed — proceeding on timer.")
+
+    controller.backward(REVERSE_SPEED)
+
+    if rear_sensor is None:
+        await asyncio.sleep(max_s)
+        await controller.smooth_stop()
+        return True
+
+    deadline     = loop.time() + max_s
+    stopped_early = False
+    while loop.time() < deadline:
+        try:
+            dist = await loop.run_in_executor(None, rear_sensor.distance_cm)
+            if dist <= _REAR_STOP_CM:
+                log.info("Rear obstacle at %.1f cm — stopping reverse early.", dist)
+                stopped_early = True
+                break
+        except Exception:
+            log.exception("Rear ultrasonic read failed during reverse — continuing on timer.")
+        remaining = deadline - loop.time()
+        if remaining > 0:
+            await asyncio.sleep(min(0.05, remaining))
+    await controller.smooth_stop()
+    return not stopped_early
+
+
+async def execute_avoidance(controller, camera, decision: str, rear_sensor=None) -> bool:
     """Execute a steering maneuver based on the avoidance decision.
 
     "TURN_LEFT"        — steer left → forward 0.8 s → centre
     "TURN_RIGHT"       — steer right → forward 0.8 s → centre
     "REVERSE_AND_TURN" — K-turn: steer → back → opposite steer → forward → centre
-    All variants end with smooth_stop() + steer_center().
+
+    Returns True  — manoeuvre completed normally.
+    Returns False — K-turn reverse was blocked by a rear obstacle; forward phase was
+                    skipped. Caller must not assume the robot has moved clear.
     """
     if decision == "TURN_LEFT":
         controller.steer(_STEER_LEFT)
@@ -321,6 +385,7 @@ async def execute_avoidance(controller, camera, decision: str):
         await asyncio.sleep(_TURN_DRIVE_S)
         await controller.smooth_stop()
         controller.steer_center()
+        return True
 
     elif decision == "TURN_RIGHT":
         controller.steer(_STEER_RIGHT)
@@ -328,6 +393,7 @@ async def execute_avoidance(controller, camera, decision: str):
         await asyncio.sleep(_TURN_DRIVE_S)
         await controller.smooth_stop()
         controller.steer_center()
+        return True
 
     else:  # REVERSE_AND_TURN — pick turn direction from free-space signal
         loop = asyncio.get_running_loop()
@@ -346,9 +412,11 @@ async def execute_avoidance(controller, camera, decision: str):
         controller.steer(steer_angle)
         await asyncio.sleep(_KTURN_STEER_SETTLE_S)
         async with camera.reverse_cam():
-            controller.backward(REVERSE_SPEED)
-            await asyncio.sleep(_KTURN_REVERSE_S)
-            await controller.smooth_stop()
+            reversed_ok = await _reverse_with_obstacle_check(controller, rear_sensor, _KTURN_REVERSE_S)
+        if not reversed_ok:
+            log.warning("K-turn reverse blocked — skipping forward phase.")
+            controller.steer_center()
+            return False
         controller.steer(opposite_angle)
         await asyncio.sleep(_KTURN_STEER_SETTLE_S)
         controller.forward(AUTONOMOUS_SPEED)
@@ -356,6 +424,7 @@ async def execute_avoidance(controller, camera, decision: str):
         controller.steer_center()
         await asyncio.sleep(_KTURN_FINAL_SETTLE_S)
         await controller.smooth_stop()
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -435,8 +504,13 @@ async def _handle_clear(controller, camera, obstacle, websocket, sweep_cache):
     await _send(websocket, "clear", sweep_cache.last_error, sweep_cache.last_conf)
 
 
-async def _free_space_avoid(controller, camera, websocket):
-    """Free-space fallback used when YOLO finds no detection or sweep fails."""
+async def _free_space_avoid(controller, camera, websocket, rear_sensor=None) -> bool:
+    """Free-space fallback used when YOLO finds no detection or sweep fails.
+
+    Returns True  — a turn or timed reverse ran; caller must check the forward sensor.
+    Returns False — straight reverse was blocked by a rear obstacle; caller should
+                    treat this as a confirmed wedge without relying on the forward sensor.
+    """
     loop = asyncio.get_running_loop()
     try:
         frame       = await loop.run_in_executor(None, capture_bgr, camera)
@@ -450,18 +524,20 @@ async def _free_space_avoid(controller, camera, websocket):
         log.info("free_space: %s (err=%+.2f) → %s",
                  "right" if error > 0 else "left", error, decision)
         await _send(websocket, "avoiding", error, conf)
-        await execute_avoidance(controller, camera, decision)
+        await execute_avoidance(controller, camera, decision, rear_sensor)
+        return True  # turn ran; caller verifies forward sensor
     else:
         log.info("free_space: blocked (conf=%.2f) — reversing straight.", conf)
         await _send(websocket, "blocked", 0.0, conf)
         controller.steer_center()
         async with camera.reverse_cam():
-            controller.backward(REVERSE_SPEED)
-            await asyncio.sleep(2.0)
-            await controller.smooth_stop()
+            reversed_ok = await _reverse_with_obstacle_check(controller, rear_sensor, _REVERSE_FALLBACK_S)
+        if not reversed_ok:
+            log.warning("Straight-reverse fallback blocked by rear obstacle.")
+        return reversed_ok
 
 
-async def _handle_blocked(controller, obstacle, camera, websocket):
+async def _handle_blocked(controller, obstacle, camera, websocket, rear_sensor=None):
     loop     = asyncio.get_running_loop()
     distance = obstacle.distance_cm()
 
@@ -508,14 +584,29 @@ async def _handle_blocked(controller, obstacle, camera, websocket):
             log.info("YOLO: %s obstacle ~%.1f cm wide, %.1f cm away → %s",
                      threat, width_cm, sweep["center"], decision)
             await _send(websocket, "avoiding", 0.0, 1.0)
-            await execute_avoidance(controller, camera, decision)
+            avoidance_ok = await execute_avoidance(controller, camera, decision, rear_sensor)
+            # avoidance_ok is False  → K-turn reverse blocked; robot barely moved, escalate immediately.
+            # avoidance_ok is True   → manoeuvre ran; re-check forward sensor to confirm clear.
+            # avoidance_ok is None   → stub/unexpected; treat as success (forward sensor is authoritative).
+            if avoidance_ok is False or obstacle.is_blocked():
+                reason = "K-turn reverse blocked" if avoidance_ok is False else decision
+                log.warning("Still blocked after %s — free-space fallback.", reason)
+                freed = await _free_space_avoid(controller, camera, websocket, rear_sensor)
+                if not freed or obstacle.is_blocked():
+                    log.critical("Wedged: blocked after all avoidance attempts — halting.")
+                    controller.force_stop()
+                    raise _WedgeError("robot wedged: front blocked after all avoidance attempts")
             return
 
     # No YOLO detection or sweep failed — free-space fallback
-    await _free_space_avoid(controller, camera, websocket)
+    freed = await _free_space_avoid(controller, camera, websocket, rear_sensor)
+    if not freed or obstacle.is_blocked():
+        log.critical("Wedged: blocked after free-space fallback — halting.")
+        controller.force_stop()
+        raise _WedgeError("robot wedged: front blocked after free-space fallback")
 
 
-async def _handle_side_threat(controller, camera, websocket, sweep_cache):
+async def _handle_side_threat(controller, camera, websocket, sweep_cache, rear_sensor=None):
     """Steer away from a YOLO-confirmed side obstacle cached in the sweep data.
 
     Uses cached distances directly rather than routing through _handle_blocked —
@@ -542,7 +633,9 @@ async def _handle_side_threat(controller, camera, websocket, sweep_cache):
     log.info("Side threat: left=%.1f right=%.1f → %s",
              left_d or -1.0, right_d or -1.0, decision)
     await _send(websocket, "avoiding", 0.0, 1.0)
-    await execute_avoidance(controller, camera, decision)
+    avoidance_ok = await execute_avoidance(controller, camera, decision, rear_sensor)
+    if avoidance_ok is False:
+        log.warning("Side-threat avoidance aborted by rear obstacle — robot may be constrained.")
     sweep_cache.invalidate()
 
 
@@ -562,7 +655,7 @@ async def setup(controller):
     )
 
 
-async def navigate_step(controller, obstacle, camera, websocket, sweep_cache):
+async def navigate_step(controller, obstacle, camera, websocket, sweep_cache, rear_sensor=None):
     if obstacle.is_blocked() or sweep_cache.any_side_blocked():
         if sweep_cache.any_side_blocked() and not obstacle.is_blocked():
             # Side hard-stop: forward sensor is clear, threat is lateral.
@@ -571,17 +664,18 @@ async def navigate_step(controller, obstacle, camera, websocket, sweep_cache):
             controller.force_stop()
             controller.move_camera_to("x", int(round(_SERVO1_CENTER)))
             await asyncio.sleep(_HEAD_SETTLE_S)
-            await _handle_side_threat(controller, camera, websocket, sweep_cache)
+            await _handle_side_threat(controller, camera, websocket, sweep_cache, rear_sensor)
         else:
-            # Forward blocked (obstacle.is_blocked() True, any side reading is secondary).
-            await _handle_blocked(controller, obstacle, camera, websocket)
+            # Forward blocked — invalidate stale sweep readings before avoidance
+            # so old side distances cannot re-trigger side-threat checks mid-manoeuvre.
             sweep_cache.invalidate()
+            await _handle_blocked(controller, obstacle, camera, websocket, rear_sensor)
     elif sweep_cache.should_avoid_side():
         # Side obstacle inside warn_cm with YOLO confirmation — steer away using
         # cached sweep data. _handle_blocked is not used here because the forward
         # ultrasonic may read clear; its deceleration logic and YOLO sweep target
         # the wrong axis for a side threat.
-        await _handle_side_threat(controller, camera, websocket, sweep_cache)
+        await _handle_side_threat(controller, camera, websocket, sweep_cache, rear_sensor)
     elif sweep_cache.yolo_blocking():
         # Low obstacle: ultrasonic beam passed over it (obstacle shorter than
         # _ULTRASONIC_HEIGHT_CM), but YOLO sees a large in-corridor detection with
@@ -591,8 +685,8 @@ async def navigate_step(controller, obstacle, camera, websocket, sweep_cache):
         controller.force_stop()
         controller.move_camera_to("x", int(round(_SERVO1_CENTER)))
         await asyncio.sleep(_HEAD_SETTLE_S)
-        await _handle_blocked(controller, obstacle, camera, websocket)
         sweep_cache.invalidate()
+        await _handle_blocked(controller, obstacle, camera, websocket, rear_sensor)
     elif obstacle.should_turn():
         await _handle_approaching(controller, websocket)
     else:
@@ -607,13 +701,31 @@ async def run_autonomous(controller, obstacle, camera, websocket):
     sweep_cache = _SweepCache()
     loop = asyncio.get_running_loop()
     consecutive_errors = 0
+
+    rear_sensor = None
+    _rear_trigger = ULTRASONIC_REAR_CFG.get("trigger_pin")
+    _rear_echo    = ULTRASONIC_REAR_CFG.get("echo_pin")
+    if _rear_trigger and _rear_echo:
+        try:
+            rear_sensor = UltrasonicSensor(trigger=_rear_trigger, echo=_rear_echo)
+            log.info("Rear ultrasonic initialised (trigger=%d, echo=%d, stop_cm=%.0f).",
+                     _rear_trigger, _rear_echo, _REAR_STOP_CM)
+        except Exception:
+            log.exception("Rear ultrasonic init failed — reversing without rear detection.")
+    else:
+        log.info("Rear ultrasonic not configured — reverse uses timer fallback.")
+
     try:
         while True:
             deadline = loop.time() + _LOOP_PERIOD
             try:
-                await navigate_step(controller, obstacle, camera, websocket, sweep_cache)
+                await navigate_step(controller, obstacle, camera, websocket, sweep_cache, rear_sensor)
                 consecutive_errors = 0
             except asyncio.CancelledError:
+                raise
+            except _WedgeError:
+                # Already force_stopped in _handle_blocked. Exit immediately — no retry.
+                log.critical("Autonomous mode halted: robot wedged.")
                 raise
             except Exception:
                 log.exception("navigate_step failed.")
@@ -630,3 +742,6 @@ async def run_autonomous(controller, obstacle, camera, websocket):
                 await asyncio.sleep(remaining)
     except asyncio.CancelledError:
         await controller.smooth_stop()
+    finally:
+        if rear_sensor is not None:
+            rear_sensor.cleanup()

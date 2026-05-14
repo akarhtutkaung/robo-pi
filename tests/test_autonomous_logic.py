@@ -50,14 +50,23 @@ class _Sensor:
 
 class _Obstacle:
     def __init__(self, blocked=False, sudden=False, turn=False, dist=50.0,
-                 sensor_dist: float = 200.0):
-        self._blocked = blocked
-        self._sudden  = sudden
-        self._turn    = turn
-        self._dist    = dist
-        self.sensor   = _Sensor(sensor_dist)
+                 sensor_dist: float = 200.0, clears_after: int | None = None):
+        self._blocked      = blocked
+        self._sudden       = sudden
+        self._turn         = turn
+        self._dist         = dist
+        self.sensor        = _Sensor(sensor_dist)
+        self._clears_after = clears_after   # is_blocked() returns False after this many True calls
+        self._blocked_calls = 0
 
-    def is_blocked(self)     : return self._blocked
+    def is_blocked(self):
+        if not self._blocked:
+            return False
+        if self._clears_after is not None:
+            self._blocked_calls += 1
+            return self._blocked_calls <= self._clears_after
+        return True
+
     def is_sudden_stop(self) : return self._sudden
     def should_turn(self)    : return self._turn
     def distance_cm(self)    : return self._dist
@@ -395,7 +404,7 @@ class TestNavigateStep:
         auto_mod.capture_bgr       = lambda cam: _blank_frame()
         auto_mod.detect_obstacles  = lambda f: []
         auto_mod.detect            = lambda f: (0.0, 0.0)
-        auto_mod.execute_avoidance = lambda c, cam, dec: asyncio.sleep(0)
+        auto_mod.execute_avoidance = lambda c, cam, dec, rs=None: asyncio.sleep(0)
         cache = self._cache()
         # Pre-load a stop-zone reading (simulates a previous tick's sweep result)
         cache.distances["right"] = _STOP_CM - 1
@@ -407,7 +416,7 @@ class TestNavigateStep:
         assert head_moves, "move_camera_to not called to re-centre head"
 
     def test_sudden_stop_calls_force_stop(self):
-        obs  = _Obstacle(blocked=True, sudden=True, dist=5.0)
+        obs  = _Obstacle(blocked=True, sudden=True, dist=5.0, clears_after=1)
         ctrl = _Controller()
         ws   = _WS()
         auto_mod.capture_bgr      = lambda cam: _blank_frame()
@@ -420,7 +429,7 @@ class TestNavigateStep:
 
     def test_blocked_yolo_path_calls_sweep(self):
         """When YOLO returns a detection, sweep_obstacle must be called."""
-        obs   = _Obstacle(blocked=True, dist=25.0)
+        obs   = _Obstacle(blocked=True, dist=25.0, clears_after=1)
         ctrl  = _Controller()
         ws    = _WS()
         swept = []
@@ -431,14 +440,14 @@ class TestNavigateStep:
         ]
         auto_mod.sweep_obstacle   = lambda c, s, l, r: (swept.append(True) or
                                                          {"left": 60.0, "center": 45.0, "right": 20.0})
-        auto_mod.execute_avoidance = lambda ctrl, cam, dec: asyncio.sleep(0)  # fast no-op
+        auto_mod.execute_avoidance = lambda ctrl, cam, dec, rs=None: asyncio.sleep(0)  # fast no-op
 
         _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws, self._cache()))
 
         assert swept, "sweep_obstacle was not called on the YOLO path"
 
     def test_blocked_yolo_path_sends_avoiding(self):
-        obs  = _Obstacle(blocked=True, dist=25.0)
+        obs  = _Obstacle(blocked=True, dist=25.0, clears_after=1)
         ctrl = _Controller()
         ws   = _WS()
 
@@ -447,7 +456,7 @@ class TestNavigateStep:
             {"x1": 100, "y1": 50, "x2": 300, "y2": 200, "conf": 0.85, "class_id": 0}
         ]
         auto_mod.sweep_obstacle   = lambda c, s, l, r: {"left": 60.0, "center": 45.0, "right": 20.0}
-        auto_mod.execute_avoidance = lambda ctrl, cam, dec: asyncio.sleep(0)
+        auto_mod.execute_avoidance = lambda ctrl, cam, dec, rs=None: asyncio.sleep(0)
 
         _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws, self._cache()))
 
@@ -455,14 +464,14 @@ class TestNavigateStep:
 
     def test_blocked_no_yolo_free_space_fallback(self):
         """No YOLO detections + confident free-space → avoiding via free_space path."""
-        obs  = _Obstacle(blocked=True, dist=25.0)
+        obs  = _Obstacle(blocked=True, dist=25.0, clears_after=1)
         ctrl = _Controller()
         ws   = _WS()
 
         auto_mod.capture_bgr      = lambda cam: _blank_frame()
         auto_mod.detect_obstacles = lambda f: []
         auto_mod.detect           = lambda f: (0.5, 0.7)  # confident, steer right
-        auto_mod.execute_avoidance = lambda ctrl, cam, dec: asyncio.sleep(0)
+        auto_mod.execute_avoidance = lambda ctrl, cam, dec, rs=None: asyncio.sleep(0)
 
         _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws, self._cache()))
 
@@ -470,7 +479,7 @@ class TestNavigateStep:
 
     def test_blocked_no_yolo_all_blocked_reverses(self):
         """No YOLO + low free-space confidence → reverse straight."""
-        obs  = _Obstacle(blocked=True, dist=25.0)
+        obs  = _Obstacle(blocked=True, dist=25.0, clears_after=1)
         ctrl = _Controller()
         ws   = _WS()
 
@@ -485,7 +494,7 @@ class TestNavigateStep:
 
     def test_ultrasonic_thread_not_blocked_branch_unchanged(self):
         """is_sudden_stop() branch remains at the top and is independent of YOLO."""
-        obs  = _Obstacle(blocked=True, sudden=True, dist=4.0)
+        obs  = _Obstacle(blocked=True, sudden=True, dist=4.0, clears_after=1)
         ctrl = _Controller()
         ws   = _WS()
         yolo_called = []
@@ -497,6 +506,40 @@ class TestNavigateStep:
         _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws, self._cache()))
 
         # force_stop must have been called (sudden stop path)
+        assert ("force_stop",) in ctrl.calls
+
+    def test_wedge_yolo_path_raises_and_force_stops(self):
+        """Permanently blocked front: avoidance + free-space fallback both fail → RuntimeError + force_stop."""
+        obs  = _Obstacle(blocked=True, dist=25.0)  # never clears — wedged
+        ctrl = _Controller()
+        ws   = _WS()
+
+        auto_mod.capture_bgr      = lambda cam: _blank_frame()
+        auto_mod.detect_obstacles = lambda f: [
+            {"x1": 100, "y1": 50, "x2": 300, "y2": 200, "conf": 0.85, "class_id": 0}
+        ]
+        auto_mod.sweep_obstacle   = lambda c, s, l, r: {"left": 60.0, "center": 45.0, "right": 20.0}
+        auto_mod.execute_avoidance = lambda ctrl, cam, dec, rs=None: asyncio.sleep(0)
+        auto_mod.detect           = lambda f: (0.5, 0.7)  # free-space fallback also turns
+
+        with pytest.raises(RuntimeError, match="wedged"):
+            _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws, self._cache()))
+
+        assert ("force_stop",) in ctrl.calls
+
+    def test_wedge_no_yolo_path_raises_and_force_stops(self):
+        """No YOLO + low free-space confidence, front stays blocked → RuntimeError + force_stop."""
+        obs  = _Obstacle(blocked=True, dist=25.0)  # never clears — wedged
+        ctrl = _Controller()
+        ws   = _WS()
+
+        auto_mod.capture_bgr      = lambda cam: _blank_frame()
+        auto_mod.detect_obstacles = lambda f: []
+        auto_mod.detect           = lambda f: (0.0, 0.1)  # below MIN_CONFIDENCE → straight reverse
+
+        with pytest.raises(RuntimeError, match="wedged"):
+            _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws, self._cache()))
+
         assert ("force_stop",) in ctrl.calls
 
 
@@ -678,7 +721,7 @@ class TestNavigateStepSideAvoid:
         obs  = _Obstacle()
         ctrl = _Controller()
         ws   = _WS()
-        auto_mod.execute_avoidance = lambda c, cam, dec: asyncio.sleep(0)
+        auto_mod.execute_avoidance = lambda c, cam, dec, rs=None: asyncio.sleep(0)
 
         _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws, self._armed_cache()))
 
@@ -689,7 +732,7 @@ class TestNavigateStepSideAvoid:
         obs  = _Obstacle()
         ctrl = _Controller()
         ws   = _WS()
-        auto_mod.execute_avoidance = lambda c, cam, dec: asyncio.sleep(0)
+        auto_mod.execute_avoidance = lambda c, cam, dec, rs=None: asyncio.sleep(0)
 
         _run(auto_mod.navigate_step(ctrl, obs, _Camera(), ws, self._armed_cache()))
 
@@ -699,7 +742,7 @@ class TestNavigateStepSideAvoid:
         """Obstacle on the left → TURN_RIGHT (steer away from threat)."""
         obs       = _Obstacle()
         decisions = []
-        auto_mod.execute_avoidance = lambda c, cam, dec: (decisions.append(dec), asyncio.sleep(0))[1]
+        auto_mod.execute_avoidance = lambda c, cam, dec, rs=None: (decisions.append(dec), asyncio.sleep(0))[1]
 
         _run(auto_mod.navigate_step(_Controller(), obs, _Camera(), _WS(), self._armed_cache("left")))
 
@@ -709,7 +752,7 @@ class TestNavigateStepSideAvoid:
         """Obstacle on the right → TURN_LEFT (steer away from threat)."""
         obs       = _Obstacle()
         decisions = []
-        auto_mod.execute_avoidance = lambda c, cam, dec: (decisions.append(dec), asyncio.sleep(0))[1]
+        auto_mod.execute_avoidance = lambda c, cam, dec, rs=None: (decisions.append(dec), asyncio.sleep(0))[1]
 
         _run(auto_mod.navigate_step(_Controller(), obs, _Camera(), _WS(), self._armed_cache("right")))
 
@@ -719,7 +762,7 @@ class TestNavigateStepSideAvoid:
         """Cache must be cleared after avoidance so stale readings cannot re-trigger."""
         obs   = _Obstacle()
         cache = self._armed_cache()
-        auto_mod.execute_avoidance = lambda c, cam, dec: asyncio.sleep(0)
+        auto_mod.execute_avoidance = lambda c, cam, dec, rs=None: asyncio.sleep(0)
 
         _run(auto_mod.navigate_step(_Controller(), obs, _Camera(), _WS(), cache))
 
@@ -729,7 +772,7 @@ class TestNavigateStepSideAvoid:
         """No side obstacle → side-avoid path not entered."""
         obs  = _Obstacle()
         ws   = _WS()
-        auto_mod.execute_avoidance = lambda c, cam, dec: asyncio.sleep(0)
+        auto_mod.execute_avoidance = lambda c, cam, dec, rs=None: asyncio.sleep(0)
         auto_mod.detect            = lambda f: (0.0, 0.6)
         auto_mod.capture_bgr       = lambda cam: np.zeros((480, 640, 3), dtype=np.uint8)
         auto_mod.detect_obstacles  = lambda f: []
@@ -867,7 +910,7 @@ class TestNavigateStepYoloBlocking:
         auto_mod.capture_bgr      = lambda cam: _blank_frame()
         auto_mod.detect_obstacles = lambda f: [_wide_centered_det()]
         auto_mod.sweep_obstacle   = lambda c, s, l, r: {"left": 60.0, "center": 200.0, "right": 60.0}
-        auto_mod.execute_avoidance = lambda c, cam, dec: asyncio.sleep(0)
+        auto_mod.execute_avoidance = lambda c, cam, dec, rs=None: asyncio.sleep(0)
 
     def test_yolo_blocking_calls_force_stop(self):
         self._stub_blocked_path()

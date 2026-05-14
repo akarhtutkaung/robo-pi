@@ -77,6 +77,15 @@ ultrasonic:
   turn_cm: 90       # Distance at which to start slowing down
   sudden_stop_cm: 20  # Distance at which to hard-stop immediately (must be < stop_cm)
 
+ultrasonic_rear:
+  # Separate, physically fixed-mount sensor at the rear of the chassis (NOT the servo1 head sensor).
+  # This sensor does not rotate — it always faces rearward. The servo1 sensor is the forward sweep sensor
+  # managed by _SweepCache; this is an independent sensor on different GPIO pins.
+  trigger_pin:      # GPIO pin — set when rear sensor is installed (leave blank until then)
+  echo_pin:         # GPIO pin — set when rear sensor is installed (leave blank until then)
+  max_distance: 2
+  stop_cm: 20       # stop reversing if rear obstacle detected within this distance
+
 obstacle_avoidance:
   robot_width_cm: 20          # Measure actual chassis width and update
   clearance_buffer_cm: 10     # Minimum extra clearance required on each side to attempt passing
