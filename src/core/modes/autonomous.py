@@ -30,8 +30,9 @@ from src.perception.vision.object_detection import (
     sweep_obstacle, calculate_real_width,
 )
 from src.perception.camera import capture_bgr
-from src.core.config import MOTOR_CFG, AUTONOMOUS_CFG, SERVO_CFG, OBSTACLE_AVOIDANCE_CFG, ULTRASONIC_CFG, ULTRASONIC_REAR_CFG
-from src.hardware.sensors.ultrasonic import UltrasonicSensor
+from src.core.config import MOTOR_CFG, AUTONOMOUS_CFG, SERVO_CFG, OBSTACLE_AVOIDANCE_CFG, ULTRASONIC_CFG
+# from src.core.config import ULTRASONIC_REAR_CFG  # rear ultrasonic not installed
+# from src.hardware.sensors.ultrasonic import UltrasonicSensor  # rear ultrasonic not installed
 
 log = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ _KTURN_REVERSE_S      = AUTONOMOUS_CFG["kturn_reverse_s"]
 _KTURN_FORWARD_S      = AUTONOMOUS_CFG["kturn_forward_s"]
 _KTURN_FINAL_SETTLE_S = AUTONOMOUS_CFG["kturn_final_settle_s"]
 _REVERSE_FALLBACK_S   = AUTONOMOUS_CFG["reverse_fallback_s"]
-_REAR_STOP_CM         = ULTRASONIC_REAR_CFG.get("stop_cm", 20)
+# _REAR_STOP_CM       = ULTRASONIC_REAR_CFG.get("stop_cm", 20)  # rear ultrasonic not installed
 _STOP_TARGET_MARGIN = 5.0   # cm — target stop distance in front of obstacle
 _MIN_DECEL_DIST_CM  = 1.0   # lower bound on d_target; prevents ÷0 in decel formula
 
@@ -316,56 +317,54 @@ async def _send(websocket, phase: str, error: float = 0.0, confidence: float = 0
 # ---------------------------------------------------------------------------
 
 async def _reverse_with_obstacle_check(controller, rear_sensor, max_s: float) -> bool:
-    """Start reversing and stop early if the rear ultrasonic detects an obstacle.
+    """Start reversing for max_s seconds, then smooth-stop.
 
-    Performs a pre-move clearance check before engaging the motor: if the rear sensor
-    already reads ≤ _REAR_STOP_CM, the reverse is skipped entirely.
+    rear_sensor parameter reserved for when the rear ultrasonic is installed.
+    Currently always runs a plain timed reverse (rear sensor not attached).
 
-    When rear_sensor is None (not yet installed), falls back to a plain timed reverse.
-
-    Returns True  — reverse ran the full duration; caller may continue the manoeuvre.
-    Returns False — reverse was skipped (no pre-move clearance) or cut short by a
-                    rear obstacle; caller must NOT proceed with the forward phase.
-
-    Calls smooth_stop() before returning in all cases.
+    Returns True — reverse ran the full duration.
+    Calls smooth_stop() before returning.
     Caller must hold camera.reverse_cam() context.
     """
-    loop = asyncio.get_running_loop()
-
-    if rear_sensor is not None:
-        try:
-            initial = await loop.run_in_executor(None, rear_sensor.distance_cm)
-            if initial <= _REAR_STOP_CM:
-                log.warning(
-                    "Insufficient rear clearance (%.1f cm) — skipping reverse.", initial
-                )
-                return False
-        except Exception:
-            log.exception("Rear pre-check failed — proceeding on timer.")
+    # --- Rear-ultrasonic logic (sensor not installed; re-enable when attached) ---
+    # loop = asyncio.get_running_loop()
+    # if rear_sensor is not None:
+    #     try:
+    #         initial = await loop.run_in_executor(None, rear_sensor.distance_cm)
+    #         if initial <= _REAR_STOP_CM:
+    #             log.warning(
+    #                 "Insufficient rear clearance (%.1f cm) — skipping reverse.", initial
+    #             )
+    #             return False
+    #     except Exception:
+    #         log.exception("Rear pre-check failed — proceeding on timer.")
+    # -------------------------------------------------------------------------
 
     controller.backward(REVERSE_SPEED)
 
-    if rear_sensor is None:
-        await asyncio.sleep(max_s)
-        await controller.smooth_stop()
-        return True
+    # --- Sensor-gated reverse loop (re-enable with above block when attached) ---
+    # if rear_sensor is not None:
+    #     deadline      = asyncio.get_running_loop().time() + max_s
+    #     stopped_early = False
+    #     while asyncio.get_running_loop().time() < deadline:
+    #         try:
+    #             dist = await asyncio.get_running_loop().run_in_executor(None, rear_sensor.distance_cm)
+    #             if dist <= _REAR_STOP_CM:
+    #                 log.info("Rear obstacle at %.1f cm — stopping reverse early.", dist)
+    #                 stopped_early = True
+    #                 break
+    #         except Exception:
+    #             log.exception("Rear ultrasonic read failed during reverse — continuing on timer.")
+    #         remaining = deadline - asyncio.get_running_loop().time()
+    #         if remaining > 0:
+    #             await asyncio.sleep(min(0.05, remaining))
+    #     await controller.smooth_stop()
+    #     return not stopped_early
+    # -------------------------------------------------------------------------
 
-    deadline     = loop.time() + max_s
-    stopped_early = False
-    while loop.time() < deadline:
-        try:
-            dist = await loop.run_in_executor(None, rear_sensor.distance_cm)
-            if dist <= _REAR_STOP_CM:
-                log.info("Rear obstacle at %.1f cm — stopping reverse early.", dist)
-                stopped_early = True
-                break
-        except Exception:
-            log.exception("Rear ultrasonic read failed during reverse — continuing on timer.")
-        remaining = deadline - loop.time()
-        if remaining > 0:
-            await asyncio.sleep(min(0.05, remaining))
+    await asyncio.sleep(max_s)
     await controller.smooth_stop()
-    return not stopped_early
+    return True
 
 
 async def execute_avoidance(controller, camera, decision: str, rear_sensor=None) -> bool:
@@ -702,18 +701,20 @@ async def run_autonomous(controller, obstacle, camera, websocket):
     loop = asyncio.get_running_loop()
     consecutive_errors = 0
 
-    rear_sensor = None
-    _rear_trigger = ULTRASONIC_REAR_CFG.get("trigger_pin")
-    _rear_echo    = ULTRASONIC_REAR_CFG.get("echo_pin")
-    if _rear_trigger and _rear_echo:
-        try:
-            rear_sensor = UltrasonicSensor(trigger=_rear_trigger, echo=_rear_echo)
-            log.info("Rear ultrasonic initialised (trigger=%d, echo=%d, stop_cm=%.0f).",
-                     _rear_trigger, _rear_echo, _REAR_STOP_CM)
-        except Exception:
-            log.exception("Rear ultrasonic init failed — reversing without rear detection.")
-    else:
-        log.info("Rear ultrasonic not configured — reverse uses timer fallback.")
+    rear_sensor = None  # rear ultrasonic not installed — re-enable init block below when attached
+    # --- Rear ultrasonic init (sensor not installed; uncomment when attached) ---
+    # _rear_trigger = ULTRASONIC_REAR_CFG.get("trigger_pin")
+    # _rear_echo    = ULTRASONIC_REAR_CFG.get("echo_pin")
+    # if _rear_trigger and _rear_echo:
+    #     try:
+    #         rear_sensor = UltrasonicSensor(trigger=_rear_trigger, echo=_rear_echo)
+    #         log.info("Rear ultrasonic initialised (trigger=%d, echo=%d, stop_cm=%.0f).",
+    #                  _rear_trigger, _rear_echo, _REAR_STOP_CM)
+    #     except Exception:
+    #         log.exception("Rear ultrasonic init failed — reversing without rear detection.")
+    # else:
+    #     log.info("Rear ultrasonic not configured — reverse uses timer fallback.")
+    # -------------------------------------------------------------------------
 
     try:
         while True:
