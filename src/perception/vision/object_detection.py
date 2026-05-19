@@ -78,9 +78,9 @@ class ObstacleDetector:
 # YOLOv8n inference — camera-based detection (Thread B)
 # ---------------------------------------------------------------------------
 
-_MODELS_DIR      = pathlib.Path(__file__).parent.parent.parent / "ai" / "models"
-_MODEL_PATH      = str(_MODELS_DIR / "yolov8n_320.onnx")
-_INPUT_SIZE      = 320
+_PROJECT_ROOT    = pathlib.Path(__file__).parents[3]
+_MODEL_PATH      = str(_PROJECT_ROOT / OBSTACLE_AVOIDANCE_CFG["yolo_model"])
+_INPUT_SIZE      = OBSTACLE_AVOIDANCE_CFG["yolo_input_size"]
 _CONF_THRESHOLD  = 0.4
 _NMS_THRESHOLD   = 0.45
 
@@ -317,6 +317,16 @@ _COCO_LABELS = {
     72: "fridge",   73: "book",     74: "clock",    76: "scissors",
 }
 
+# Populated from config when yolo_class_names is set (custom trained model).
+# Empty list → COCO label fallback used instead.
+_CUSTOM_NAMES: list[str] = OBSTACLE_AVOIDANCE_CFG.get("yolo_class_names", [])
+
+
+def _class_label(class_id: int) -> str:
+    if _CUSTOM_NAMES:
+        return _CUSTOM_NAMES[class_id] if class_id < len(_CUSTOM_NAMES) else f"cls{class_id}"
+    return _COCO_LABELS.get(class_id, f"cls{class_id}")
+
 
 def draw_detections(vis: np.ndarray, detections: list) -> np.ndarray:
     """Draw YOLO bounding boxes and labels onto vis (modifies in-place, returns vis).
@@ -325,7 +335,7 @@ def draw_detections(vis: np.ndarray, detections: list) -> np.ndarray:
     appear on the same frame.
     """
     for d in detections:
-        label = _COCO_LABELS.get(d["class_id"], f"cls{d['class_id']}")
+        label = _class_label(d["class_id"])
         x1, y1, x2, y2 = d["x1"], d["y1"], d["x2"], d["y2"]
         cv2.rectangle(vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
         cv2.putText(vis, f"{label} {d['conf']:.2f}",

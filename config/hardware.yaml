@@ -93,3 +93,6 @@ obstacle_avoidance:
                                # Calibrate empirically: place a 30 cm object at 50 cm, measure pixel
                                # width W in the lores frame, then set to (W * 50) / 30.
   camera_hfov_deg: 102        # Pi Camera Module 3 Wide — horizontal FOV (not diagonal)
+  yolo_model: "src/ai/models/yolov8n_320.onnx"  # path relative to project root
+  yolo_input_size: 320        # YOLO network input resolution (px); independent of lores stream size
+  yolo_class_names: []        # empty → COCO label fallback; set to ["obstacle"] after custom training

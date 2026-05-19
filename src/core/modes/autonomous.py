@@ -20,7 +20,6 @@ drive_state message format:
 import asyncio
 import json
 import logging
-import math
 
 from websockets.exceptions import ConnectionClosed
 
@@ -30,9 +29,18 @@ from src.perception.vision.object_detection import (
     sweep_obstacle, calculate_real_width,
 )
 from src.perception.camera import capture_bgr
-from src.core.config import MOTOR_CFG, AUTONOMOUS_CFG, SERVO_CFG, OBSTACLE_AVOIDANCE_CFG, ULTRASONIC_CFG
-# from src.core.config import ULTRASONIC_REAR_CFG  # rear ultrasonic not installed
-# from src.hardware.sensors.ultrasonic import UltrasonicSensor  # rear ultrasonic not installed
+from src.core.config import MOTOR_CFG, AUTONOMOUS_CFG, SERVO_CFG
+
+from src.perception.sweep_cache import (
+    _SweepCache,
+    _SERVO1_CENTER, _ULTRASONIC_HEIGHT_CM,
+    _STOP_CM, _WARN_CM, _SWEEP_POSITIONS, _FOCAL_LENGTH_PX, _ROBOT_WIDTH_CM,
+    _SWEEP_SIDE_CORRIDOR_CM, _FRAME_W, _YOLO_BLOCK_RATIO,
+)
+from src.navigation.avoidance import (
+    decide_avoidance, execute_avoidance, _reverse_with_obstacle_check,
+    AUTONOMOUS_SPEED, REVERSE_SPEED, _STEER_LEFT, _STEER_RIGHT,
+)
 
 log = logging.getLogger(__name__)
 
@@ -41,27 +49,15 @@ class _WedgeError(RuntimeError):
     """Robot is confirmed wedged (front and rear both blocked). Triggers immediate halt."""
 
 
-_FOCAL_LENGTH_PX    = OBSTACLE_AVOIDANCE_CFG["focal_length_px"]
-
-AUTONOMOUS_SPEED    = AUTONOMOUS_CFG["speed"]
-REVERSE_SPEED       = AUTONOMOUS_CFG["reverse_speed"]
 APPROACH_SPEED      = AUTONOMOUS_CFG["approach_speed"]
 _CM_PER_SPEED_UNIT  = MOTOR_CFG["rear"]["cm_per_speed_unit"]
-
-# execute_avoidance timing — sourced from modes.yaml so they stay in sync with speed
-_TURN_DRIVE_S         = AUTONOMOUS_CFG["turn_drive_s"]
-_KTURN_STEER_SETTLE_S = AUTONOMOUS_CFG["kturn_steer_settle_s"]
-_KTURN_REVERSE_S      = AUTONOMOUS_CFG["kturn_reverse_s"]
-_KTURN_FORWARD_S      = AUTONOMOUS_CFG["kturn_forward_s"]
-_KTURN_FINAL_SETTLE_S = AUTONOMOUS_CFG["kturn_final_settle_s"]
-_REVERSE_FALLBACK_S   = AUTONOMOUS_CFG["reverse_fallback_s"]
+_REVERSE_FALLBACK_S = AUTONOMOUS_CFG["reverse_fallback_s"]
+# from src.core.config import ULTRASONIC_REAR_CFG  # rear ultrasonic not installed
 # _REAR_STOP_CM       = ULTRASONIC_REAR_CFG.get("stop_cm", 20)  # rear ultrasonic not installed
 _STOP_TARGET_MARGIN = 5.0   # cm — target stop distance in front of obstacle
 _MIN_DECEL_DIST_CM  = 1.0   # lower bound on d_target; prevents ÷0 in decel formula
 
-_STEER_RIGHT      = SERVO_CFG["servo0"]["max_angle"]    # 50  — full right
-_STEER_LEFT       = SERVO_CFG["servo0"]["min_angle"]    # 140 — full left
-_CENTER_ANGLE     = SERVO_CFG["servo0"]["center_angle"] # 94.68
+_CENTER_ANGLE     = SERVO_CFG["servo0"]["center_angle"]  # 94.68
 _STEER_HALF_RANGE = min(
     _CENTER_ANGLE - _STEER_RIGHT,
     _STEER_LEFT   - _CENTER_ANGLE,
@@ -74,184 +70,14 @@ _DIRECTION_THRESHOLDS = [
     (2.0,  "HARD"),
 ]
 
-_ROBOT_WIDTH_CM  = OBSTACLE_AVOIDANCE_CFG["robot_width_cm"]
-_CLEARANCE_CM    = OBSTACLE_AVOIDANCE_CFG["clearance_buffer_cm"]
-_MIN_PASS_GAP_CM = _ROBOT_WIDTH_CM + _CLEARANCE_CM
-
-_FRAME_W     = 640   # lores stream width fed to YOLO and free-space
 _MIN_SPEED   = 0.1   # below this throttle the robot is considered stopped
 _LOOP_PERIOD = 0.1   # target seconds per navigation tick
-
-# ---------------------------------------------------------------------------
-# Clear-phase lateral sweep
-# ---------------------------------------------------------------------------
-
-_SERVO1_CENTER   = SERVO_CFG["servo1"]["center_angle"]
-_SERVO1_MIN      = SERVO_CFG["servo1"]["max_angle"]     # 0   — full right
-_SERVO1_MAX      = SERVO_CFG["servo1"]["min_angle"]     # 180 — full left
-_SWEEP_ANGLE_DEG = AUTONOMOUS_CFG["sweep_angle_deg"]
-_WARN_CM         = AUTONOMOUS_CFG["warn_cm"]
-_STOP_CM              = ULTRASONIC_CFG["stop_cm"]
-_ULTRASONIC_HEIGHT_CM = ULTRASONIC_CFG["height_cm"]  # 14 cm — obstacles shorter than this pass under the beam
-
-# Geometric lower bound for the YOLO-only blocking threshold: at stop_cm, an obstacle as wide
-# as the sensor height projects this fraction of the frame. The configured ratio may be larger
-# (tighter), but must never fall below this minimum or distant detectable objects cause false triggers.
-_YOLO_BLOCK_RATIO = max(
-    AUTONOMOUS_CFG["yolo_block_ratio"],
-    (_ULTRASONIC_HEIGHT_CM * _FOCAL_LENGTH_PX) / (_STOP_CM * _FRAME_W),
-)
-
 _HEAD_SETTLE_S   = 0.15  # seconds — covers 80-120 ms servo travel + camera pipeline latency
-
-# (name, servo1 angle) triples traversed left → centre → right each tick cycle
-_SWEEP_POSITIONS: list[tuple[str, int]] = [
-    ("left",   int(min(_SERVO1_MAX, round(_SERVO1_CENTER + _SWEEP_ANGLE_DEG)))),
-    ("center", int(round(_SERVO1_CENTER))),
-    ("right",  int(max(_SERVO1_MIN, round(_SERVO1_CENTER - _SWEEP_ANGLE_DEG)))),
-]
-
-# At sweep angle θ, a side reading d has lateral offset d·sin(θ). Below this distance
-# that offset is less than the robot's half-width → obstacle is inside the body corridor.
-_SWEEP_SIDE_CORRIDOR_CM = (_ROBOT_WIDTH_CM / 2.0) / math.sin(math.radians(_SWEEP_ANGLE_DEG))
-
-
-class _SweepCache:
-    """Rotating 3-position sensor cache for the clear phase.
-
-    Each navigate_step call in the clear phase advances to the next position
-    (left → center → right → left …), stores ultrasonic distance and YOLO
-    detections, and uses the cached data to adapt speed before the forward
-    ultrasonic would trigger is_blocked().
-    """
-
-    def __init__(self):
-        self._idx       = 0
-        self.distances  = {"left": None, "center": None, "right": None}
-        self.detections: dict[str, list] = {"left": [],   "center": [],   "right": []}
-        self.last_error = 0.0
-        self.last_conf  = 0.0
-
-    def advance(self) -> tuple[str, int]:
-        """Return (name, servo_angle) for the current position and advance the index."""
-        name, angle = _SWEEP_POSITIONS[self._idx]
-        self._idx = (self._idx + 1) % len(_SWEEP_POSITIONS)
-        return name, angle
-
-    def any_side_blocked(self) -> bool:
-        """True if any SIDE-direction cached distance is in the stop zone (center excluded).
-
-        Center readings belong to the forward-ultrasonic path (obstacle.is_blocked), which
-        applies physics-based smooth deceleration. Including center here would bypass that
-        and call force_stop() instead — a hard jerk stop when the obstacle is directly ahead.
-        """
-        return any(
-            d is not None and d <= _STOP_CM
-            for name, d in self.distances.items()
-            if name != "center"
-        )
-
-    def should_slow(self) -> bool:
-        """True if sweep data suggests slowing is warranted.
-
-        Conditions (any one triggers slow):
-        - YOLO + ultrasonic both agree on obstacle inside warn_cm (normal case)
-        - Ultrasonic alone < stop_cm × 1.5 — catches dark/novel objects YOLO misses
-        - in_corridor()     — YOLO sees obstacle in robot's body corridor, ultrasonic missed
-        - side_in_corridor() — side geometry: obstacle in body path, YOLO also missed
-        """
-        _ultrasonic_slow_cm = _STOP_CM * 1.2
-        for name, dist in self.distances.items():
-            if dist is None:
-                continue
-            if dist < _WARN_CM and self.detections[name]:
-                return True
-            if dist < _ultrasonic_slow_cm:
-                return True
-        if self.in_corridor():
-            return True
-        if self.side_in_corridor():
-            return True
-        return False
-
-    def in_corridor(self, frame_width: int = _FRAME_W) -> bool:
-        """True if any center-frame YOLO detection overlaps the robot's projected body width.
-
-        Uses the pinhole model: at center distance d, the robot's half-width in pixels is
-        (robot_half_width_cm × focal_length_px) / d. Any detection whose x-range overlaps
-        [cx − half_w_px, cx + half_w_px] is within the robot's physical path.
-        Only meaningful after the center tick has been processed.
-        """
-        dets = self.detections["center"]
-        dist = self.distances["center"]
-        if not dets or not dist or dist <= 0:
-            return False
-        half_w_px = (_ROBOT_WIDTH_CM / 2.0 * _FOCAL_LENGTH_PX) / max(dist, 10.0)
-        cx = frame_width / 2.0
-        return any(d["x1"] < cx + half_w_px and d["x2"] > cx - half_w_px for d in dets)
-
-    def side_in_corridor(self) -> bool:
-        """True if any side-sweep ultrasonic reading places an obstacle inside the robot's body.
-
-        At sweep angle θ, a distance d gives lateral offset d·sin(θ). When that is less than
-        the robot's half-width the obstacle is geometrically within the collision corridor —
-        catches dark/novel objects that neither YOLO nor the center ultrasonic detects.
-        """
-        for name in ("left", "right"):
-            d = self.distances[name]
-            if d is not None and 0 < d < _SWEEP_SIDE_CORRIDOR_CM:
-                return True
-        return False
-
-    def should_avoid_side(self) -> bool:
-        """True if a side-sweep reading is inside warn_cm AND YOLO confirms an obstacle there.
-
-        Fills the gap between should_slow() (reduces speed) and any_side_blocked() (hard stop):
-        an obstacle 30–warn_cm on the side that YOLO also sees warrants full avoidance, not
-        just a speed reduction.
-        """
-        for name in ("left", "right"):
-            d = self.distances[name]
-            if d is not None and d < _WARN_CM and self.detections[name]:
-                return True
-        return False
-
-    def yolo_blocking(self) -> bool:
-        """True when a large in-corridor YOLO detection indicates a low obstacle the ultrasonic missed.
-
-        The sensor at _ULTRASONIC_HEIGHT_CM passes over obstacles shorter than itself, returning
-        a clear ultrasonic reading while YOLO sees a large bounding box. Guard: only fires when
-        ultrasonic reads >= warn_cm so the normal is_blocked()/should_turn() paths are not bypassed.
-
-        Corridor width is computed at stop_cm rather than the (unreliable) ultrasonic distance to
-        give a conservative check appropriate for an obstacle assumed to be close.
-        """
-        dets = self.detections["center"]
-        dist = self.distances["center"]
-        if not dets or dist is None:
-            return False
-        if dist < _WARN_CM:
-            return False   # normal ultrasonic path owns this distance range
-        half_w_px = (_ROBOT_WIDTH_CM / 2.0 * _FOCAL_LENGTH_PX) / _STOP_CM
-        cx = _FRAME_W / 2.0
-        for det in dets:
-            if (det["x2"] - det["x1"]) / _FRAME_W >= _YOLO_BLOCK_RATIO:
-                if det["x1"] < cx + half_w_px and det["x2"] > cx - half_w_px:
-                    return True
-        return False
-
-    def invalidate(self):
-        """Reset all cached sensor readings after avoidance completes.
-
-        Prevents stale left/right readings from a previously-passed obstacle from
-        re-triggering should_avoid_side() or any_side_blocked() on subsequent ticks.
-        """
-        self.distances  = {"left": None, "center": None, "right": None}
-        self.detections = {"left": [],   "center": [],   "right": []}
+_MAX_CONSECUTIVE_ERRORS = 5
 
 
 # ---------------------------------------------------------------------------
-# Pure helpers
+# WebSocket helper
 # ---------------------------------------------------------------------------
 
 def _direction_label(error: float) -> str:
@@ -266,37 +92,6 @@ def _direction_label(error: float) -> str:
     return "HARD LEFT" if error < 0 else "HARD RIGHT"
 
 
-def decide_avoidance(width_threat: str, sweep: dict) -> str:
-    """Return the avoidance maneuver to execute given threat class and sweep data.
-
-    width_threat — "WIDE" | "MEDIUM" | "NARROW"  (from classify_width_threat)
-    sweep        — {"left": cm, "center": cm, "right": cm}  (from sweep_obstacle)
-
-    Returns "TURN_LEFT" | "TURN_RIGHT" | "REVERSE_AND_TURN"
-    """
-    if width_threat == "WIDE":
-        return "REVERSE_AND_TURN"
-
-    left_cm  = sweep.get("left",  0.0)
-    right_cm = sweep.get("right", 0.0)
-    if left_cm == 0.0 and right_cm == 0.0:
-        log.warning("decide_avoidance: sweep returned zero on both sides — reversing.")
-        return "REVERSE_AND_TURN"
-
-    best_side = "TURN_LEFT" if left_cm >= right_cm else "TURN_RIGHT"
-    best_cm   = max(left_cm, right_cm)
-
-    if width_threat == "NARROW":
-        return best_side
-
-    # MEDIUM — only attempt to pass if the winning side has enough clearance
-    return best_side if best_cm >= _MIN_PASS_GAP_CM else "REVERSE_AND_TURN"
-
-
-# ---------------------------------------------------------------------------
-# WebSocket helper
-# ---------------------------------------------------------------------------
-
 async def _send(websocket, phase: str, error: float = 0.0, confidence: float = 0.0):
     try:
         await websocket.send(json.dumps({
@@ -310,120 +105,6 @@ async def _send(websocket, phase: str, error: float = 0.0, confidence: float = 0
         pass  # client disconnected — not an error
     except Exception:
         log.exception("Unexpected error sending drive_state")
-
-
-# ---------------------------------------------------------------------------
-# Avoidance maneuvers
-# ---------------------------------------------------------------------------
-
-async def _reverse_with_obstacle_check(controller, rear_sensor, max_s: float) -> bool:
-    """Start reversing for max_s seconds, then smooth-stop.
-
-    rear_sensor parameter reserved for when the rear ultrasonic is installed.
-    Currently always runs a plain timed reverse (rear sensor not attached).
-
-    Returns True — reverse ran the full duration.
-    Calls smooth_stop() before returning.
-    Caller must hold camera.reverse_cam() context.
-    """
-    # --- Rear-ultrasonic logic (sensor not installed; re-enable when attached) ---
-    # loop = asyncio.get_running_loop()
-    # if rear_sensor is not None:
-    #     try:
-    #         initial = await loop.run_in_executor(None, rear_sensor.distance_cm)
-    #         if initial <= _REAR_STOP_CM:
-    #             log.warning(
-    #                 "Insufficient rear clearance (%.1f cm) — skipping reverse.", initial
-    #             )
-    #             return False
-    #     except Exception:
-    #         log.exception("Rear pre-check failed — proceeding on timer.")
-    # -------------------------------------------------------------------------
-
-    controller.backward(REVERSE_SPEED)
-
-    # --- Sensor-gated reverse loop (re-enable with above block when attached) ---
-    # if rear_sensor is not None:
-    #     deadline      = asyncio.get_running_loop().time() + max_s
-    #     stopped_early = False
-    #     while asyncio.get_running_loop().time() < deadline:
-    #         try:
-    #             dist = await asyncio.get_running_loop().run_in_executor(None, rear_sensor.distance_cm)
-    #             if dist <= _REAR_STOP_CM:
-    #                 log.info("Rear obstacle at %.1f cm — stopping reverse early.", dist)
-    #                 stopped_early = True
-    #                 break
-    #         except Exception:
-    #             log.exception("Rear ultrasonic read failed during reverse — continuing on timer.")
-    #         remaining = deadline - asyncio.get_running_loop().time()
-    #         if remaining > 0:
-    #             await asyncio.sleep(min(0.05, remaining))
-    #     await controller.smooth_stop()
-    #     return not stopped_early
-    # -------------------------------------------------------------------------
-
-    await asyncio.sleep(max_s)
-    await controller.smooth_stop()
-    return True
-
-
-async def execute_avoidance(controller, camera, decision: str, rear_sensor=None) -> bool:
-    """Execute a steering maneuver based on the avoidance decision.
-
-    "TURN_LEFT"        — steer left → forward 0.8 s → centre
-    "TURN_RIGHT"       — steer right → forward 0.8 s → centre
-    "REVERSE_AND_TURN" — K-turn: steer → back → opposite steer → forward → centre
-
-    Returns True  — manoeuvre completed normally.
-    Returns False — K-turn reverse was blocked by a rear obstacle; forward phase was
-                    skipped. Caller must not assume the robot has moved clear.
-    """
-    if decision == "TURN_LEFT":
-        controller.steer(_STEER_LEFT)
-        controller.forward(AUTONOMOUS_SPEED)
-        await asyncio.sleep(_TURN_DRIVE_S)
-        await controller.smooth_stop()
-        controller.steer_center()
-        return True
-
-    elif decision == "TURN_RIGHT":
-        controller.steer(_STEER_RIGHT)
-        controller.forward(AUTONOMOUS_SPEED)
-        await asyncio.sleep(_TURN_DRIVE_S)
-        await controller.smooth_stop()
-        controller.steer_center()
-        return True
-
-    else:  # REVERSE_AND_TURN — pick turn direction from free-space signal
-        loop = asyncio.get_running_loop()
-        try:
-            frame       = await loop.run_in_executor(None, capture_bgr, camera)
-            error, conf = await loop.run_in_executor(None, detect, frame)
-        except Exception:
-            log.exception("free_space capture failed in K-turn — defaulting left.")
-            error, conf = -1.0, 0.0
-
-        if conf >= MIN_CONFIDENCE and error > 0:
-            steer_angle, opposite_angle = _STEER_RIGHT, _STEER_LEFT
-        else:
-            steer_angle, opposite_angle = _STEER_LEFT, _STEER_RIGHT
-
-        controller.steer(steer_angle)
-        await asyncio.sleep(_KTURN_STEER_SETTLE_S)
-        async with camera.reverse_cam():
-            reversed_ok = await _reverse_with_obstacle_check(controller, rear_sensor, _KTURN_REVERSE_S)
-        if not reversed_ok:
-            log.warning("K-turn reverse blocked — skipping forward phase.")
-            controller.steer_center()
-            return False
-        controller.steer(opposite_angle)
-        await asyncio.sleep(_KTURN_STEER_SETTLE_S)
-        controller.forward(AUTONOMOUS_SPEED)
-        await asyncio.sleep(_KTURN_FORWARD_S)
-        controller.steer_center()
-        await asyncio.sleep(_KTURN_FINAL_SETTLE_S)
-        await controller.smooth_stop()
-        return True
 
 
 # ---------------------------------------------------------------------------
@@ -692,9 +373,6 @@ async def navigate_step(controller, obstacle, camera, websocket, sweep_cache, re
         await _handle_clear(controller, camera, obstacle, websocket, sweep_cache)
 
 
-_MAX_CONSECUTIVE_ERRORS = 5
-
-
 async def run_autonomous(controller, obstacle, camera, websocket):
     await setup(controller)
     sweep_cache = _SweepCache()
@@ -703,6 +381,8 @@ async def run_autonomous(controller, obstacle, camera, websocket):
 
     rear_sensor = None  # rear ultrasonic not installed — re-enable init block below when attached
     # --- Rear ultrasonic init (sensor not installed; uncomment when attached) ---
+    # from src.hardware.sensors.ultrasonic import UltrasonicSensor
+    # from src.core.config import ULTRASONIC_REAR_CFG
     # _rear_trigger = ULTRASONIC_REAR_CFG.get("trigger_pin")
     # _rear_echo    = ULTRASONIC_REAR_CFG.get("echo_pin")
     # if _rear_trigger and _rear_echo:
