@@ -119,23 +119,15 @@ async def _handle_approaching(controller, websocket):
 
 
 async def _handle_clear(controller, camera, obstacle, websocket, sweep_cache):
-    """One tick of the clear phase.
+    """One tick of the clear phase — camera stays forward-facing.
 
-    Advances the sweep index, points the head servo to the next position, then
-    concurrently captures a frame and reads the ultrasonic sensor (which now
-    measures in the direction the head is pointing).
-
-    On center ticks: YOLO + free-space run concurrently; steering is updated.
-    On left/right ticks: YOLO only (free-space is invalid when the head is angled).
-
-    Speed is reduced to APPROACH_SPEED if the sweep cache shows a YOLO-confirmed
-    obstacle inside the warning zone; otherwise full AUTONOMOUS_SPEED.
+    Captures a frame and reads the ultrasonic concurrently. YOLO and free-space
+    run on the same forward frame every tick; steering is updated from free-space.
+    Speed is reduced to APPROACH_SPEED if the sweep cache indicates a nearby obstacle.
     """
     loop = asyncio.get_running_loop()
-    name, head_angle = sweep_cache.advance()
-    controller.move_camera_to("x", head_angle)
+    controller.move_camera_to("x", int(round(_SERVO1_CENTER)))
 
-    # Capture frame and read ultrasonic concurrently — both block the calling thread.
     try:
         frame, dist = await asyncio.gather(
             loop.run_in_executor(None, capture_bgr, camera),
@@ -145,39 +137,29 @@ async def _handle_clear(controller, camera, obstacle, websocket, sweep_cache):
         log.exception("clear phase: capture/sensor failed — skipping tick.")
         return
 
-    sweep_cache.distances[name] = dist
+    sweep_cache.distances["center"] = dist
 
-    if name == "center":
-        # YOLO and free-space both need the same forward frame — run them in parallel.
-        try:
-            dets, (error, conf) = await asyncio.gather(
-                loop.run_in_executor(None, detect_obstacles, frame),
-                loop.run_in_executor(None, detect, frame),
-            )
-        except Exception:
-            log.exception("clear phase center: inference failed.")
-            dets, error, conf = [], 0.0, 0.0
-        sweep_cache.detections[name] = dets
-        in_path = sweep_cache.in_corridor()
-        if in_path:
-            controller.steer_center()
-            error = 0.0
-        elif conf >= MIN_CONFIDENCE:
-            controller.steer(int(round(_CENTER_ANGLE - error * _STEER_HALF_RANGE)))
-        else:
-            error = 0.0
-            controller.steer_center()
-        sweep_cache.last_error = error
-        sweep_cache.last_conf  = conf
+    try:
+        dets, (error, conf) = await asyncio.gather(
+            loop.run_in_executor(None, detect_obstacles, frame),
+            loop.run_in_executor(None, detect, frame),
+        )
+    except Exception:
+        log.exception("clear phase: inference failed.")
+        dets, error, conf = [], 0.0, 0.0
+
+    sweep_cache.detections["center"] = dets
+    in_path = sweep_cache.in_corridor()
+    if in_path:
+        controller.steer_center()
+        error = 0.0
+    elif conf >= MIN_CONFIDENCE:
+        controller.steer(int(round(_CENTER_ANGLE - error * _STEER_HALF_RANGE)))
     else:
-        # Off-center: free-space result would be invalid; YOLO still gives early warning.
-        try:
-            sweep_cache.detections[name] = await loop.run_in_executor(
-                None, detect_obstacles, frame
-            )
-        except Exception:
-            log.exception("clear phase: YOLO failed at %s.", name)
-            sweep_cache.detections[name] = []
+        error = 0.0
+        controller.steer_center()
+    sweep_cache.last_error = error
+    sweep_cache.last_conf  = conf
 
     speed = APPROACH_SPEED if sweep_cache.should_slow() else AUTONOMOUS_SPEED
     controller.forward(speed)

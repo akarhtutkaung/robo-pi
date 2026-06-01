@@ -12,6 +12,12 @@ YOLO functions:
   sweep_obstacle(controller, ultrasonic, bbox_left_px, bbox_right_px)  → dict
   calculate_real_width(bbox_pixel_width, distance_cm, focal_length_px) → float
 
+Multi-model support:
+  Models are configured via obstacle_avoidance.yolo_models in hardware.yaml.
+  Each enabled model runs independently; detections are merged via union + NMS dedup.
+  Activate the custom model by setting enabled: true for its entry and dropping the
+  ONNX file into src/ai/models/ — no code changes required.
+
 Debug stream (SSH → browser):
   On the Pi:
     cd ~/robo-pi
@@ -28,6 +34,7 @@ Debug stream (SSH → browser):
 
 import math
 import pathlib
+import threading
 import time
 import cv2
 import numpy as np
@@ -78,102 +85,181 @@ class ObstacleDetector:
 # YOLOv8n inference — camera-based detection (Thread B)
 # ---------------------------------------------------------------------------
 
-_PROJECT_ROOT    = pathlib.Path(__file__).parents[3]
-_MODEL_PATH      = str(_PROJECT_ROOT / OBSTACLE_AVOIDANCE_CFG["yolo_model"])
-_INPUT_SIZE      = OBSTACLE_AVOIDANCE_CFG["yolo_input_size"]
-_CONF_THRESHOLD  = 0.4
-_NMS_THRESHOLD   = 0.45
+_PROJECT_ROOT   = pathlib.Path(__file__).parents[3]
+_CONF_THRESHOLD = 0.4
+_NMS_THRESHOLD  = 0.45
 
-_net = None
+# Each loaded model: {"net": cv2.dnn_Net, "input_size": int, "class_names": list[str]}
+_models: list[dict] = []
+_label_lookup: dict[int, str] = {}   # merged from per-model class_names at load time
+_models_lock = threading.Lock()
 
 
-def _load_net():
-    global _net
-    if _net is None:
-        try:
-            _net = cv2.dnn.readNetFromONNX(_MODEL_PATH)
-        except Exception as e:
-            print(f"[object_detection] Failed to load YOLO model: {e}")
-    return _net
+def _read_model_configs() -> list[dict]:
+    """Return enabled model specs from hardware.yaml.
+
+    Reads obstacle_avoidance.yolo_models list (new format) if present, otherwise
+    falls back to the deprecated scalar yolo_model / yolo_input_size / yolo_class_names keys.
+    """
+    cfg = OBSTACLE_AVOIDANCE_CFG
+    entries = cfg.get("yolo_models")
+    if entries:
+        return [
+            {
+                "path":        str(_PROJECT_ROOT / e["path"]),
+                "input_size":  int(e["input_size"]),
+                "class_names": list(e.get("class_names") or []),
+            }
+            for e in entries
+            if e.get("enabled", True)
+        ]
+    return [{
+        "path":        str(_PROJECT_ROOT / cfg["yolo_model"]),
+        "input_size":  int(cfg["yolo_input_size"]),
+        "class_names": list(cfg.get("yolo_class_names") or []),
+    }]
+
+
+def _load_models() -> list[dict]:
+    """Lazy-load all enabled YOLO models. Thread-safe via double-checked locking."""
+    global _models, _label_lookup
+    if _models:
+        return _models
+    with _models_lock:
+        if _models:
+            return _models
+        for spec in _read_model_configs():
+            try:
+                net = cv2.dnn.readNetFromONNX(spec["path"])
+                _models.append({
+                    "net":         net,
+                    "input_size":  spec["input_size"],
+                    "class_names": spec["class_names"],
+                })
+                for idx, name in enumerate(spec["class_names"]):
+                    _label_lookup[idx] = name
+                print(f"[object_detection] Loaded model: {spec['path']} @ {spec['input_size']}px")
+            except Exception as e:
+                print(f"[object_detection] Failed to load model {spec['path']}: {e}")
+    return _models
+
+
+def _run_single_model(
+    frame_bgr: np.ndarray,
+    net: cv2.dnn.Net,
+    input_size: int,
+) -> list[dict]:
+    """Run inference on one loaded model. Returns per-model NMS-filtered detections."""
+    h, w = frame_bgr.shape[:2]
+
+    blob = cv2.dnn.blobFromImage(
+        frame_bgr,
+        scalefactor=1 / 255.0,
+        size=(input_size, input_size),
+        swapRB=True,
+        crop=False,
+    )
+    net.setInput(blob)
+    raw = net.forward()          # [1, 84, num_predictions]
+
+    output      = raw[0].T       # [num_predictions, 84]
+    class_scores = output[:, 4:]
+    class_ids    = class_scores.argmax(axis=1)
+    confidences  = class_scores.max(axis=1)
+
+    mask        = confidences >= _CONF_THRESHOLD
+    output      = output[mask]
+    class_ids   = class_ids[mask]
+    confidences = confidences[mask]
+
+    if len(output) == 0:
+        return []
+
+    scale_x = w / input_size
+    scale_y = h / input_size
+
+    cx  = output[:, 0] * scale_x
+    cy  = output[:, 1] * scale_y
+    bw  = output[:, 2] * scale_x
+    bh  = output[:, 3] * scale_y
+
+    x1 = np.clip(cx - bw / 2, 0, w).astype(int)
+    y1 = np.clip(cy - bh / 2, 0, h).astype(int)
+    x2 = np.clip(cx + bw / 2, 0, w).astype(int)
+    y2 = np.clip(cy + bh / 2, 0, h).astype(int)
+
+    boxes_xywh = [[int(x1[i]), int(y1[i]), int(x2[i] - x1[i]), int(y2[i] - y1[i])]
+                  for i in range(len(x1))]
+    indices = cv2.dnn.NMSBoxes(
+        boxes_xywh, confidences.tolist(), _CONF_THRESHOLD, _NMS_THRESHOLD
+    )
+
+    if len(indices) == 0:
+        return []
+    flat = indices.flatten()
+
+    return [
+        {
+            "x1":       int(x1[i]),
+            "y1":       int(y1[i]),
+            "x2":       int(x2[i]),
+            "y2":       int(y2[i]),
+            "conf":     float(confidences[i]),
+            "class_id": int(class_ids[i]),
+        }
+        for i in flat
+    ]
+
+
+def _nms_dedup(detections: list[dict]) -> list[dict]:
+    """Class-agnostic NMS pass to remove duplicate boxes across models.
+
+    When both models detect the same physical obstacle, the higher-confidence box
+    survives. Class-agnostic is correct because the avoidance pipeline never reads
+    class_id — only bounding box coordinates matter for navigation decisions.
+    """
+    if not detections:
+        return []
+    boxes_xywh  = [[d["x1"], d["y1"], d["x2"] - d["x1"], d["y2"] - d["y1"]]
+                   for d in detections]
+    confidences = [d["conf"] for d in detections]
+    indices = cv2.dnn.NMSBoxes(boxes_xywh, confidences, _CONF_THRESHOLD, _NMS_THRESHOLD)
+    if len(indices) == 0:
+        return []
+    return [detections[i] for i in indices.flatten()]
 
 
 def detect_obstacles(frame_bgr: np.ndarray) -> list:
-    """Run YOLOv8n inference on a BGR frame.
+    """Run all enabled YOLO models on a BGR frame.
 
-    Returns a list of dicts — one per detected obstacle after NMS:
-        {"x1": int, "y1": int, "x2": int, "y2": int,
-         "conf": float, "class_id": int}
+    Returns a merged list of dicts — one per surviving obstacle after per-model NMS
+    and a single cross-model NMS dedup pass:
+        {"x1": int, "y1": int, "x2": int, "y2": int, "conf": float, "class_id": int}
     Coordinates are in the original frame's pixel space.
-    Returns [] on empty frame, missing model, or any inference error.
+    Returns [] on empty frame, no loaded models, or any inference error.
+
+    When only one model is enabled the cross-model dedup pass is skipped entirely
+    (single-model fast path — zero overhead vs previous behaviour).
     """
     if frame_bgr is None or frame_bgr.size == 0:
         return []
     try:
-        net = _load_net()
-        if net is None:
+        models = _load_models()
+        if not models:
             return []
 
-        h, w = frame_bgr.shape[:2]
+        if len(models) == 1:
+            m = models[0]
+            return _run_single_model(frame_bgr, m["net"], m["input_size"])
 
-        blob = cv2.dnn.blobFromImage(
-            frame_bgr,
-            scalefactor=1 / 255.0,
-            size=(_INPUT_SIZE, _INPUT_SIZE),
-            swapRB=True,
-            crop=False,
-        )
-        net.setInput(blob)
-        raw = net.forward()          # [1, 84, num_predictions]
+        all_dets: list[dict] = []
+        for m in models:
+            try:
+                all_dets.extend(_run_single_model(frame_bgr, m["net"], m["input_size"]))
+            except Exception as e:
+                print(f"[object_detection] model inference error: {e}")
 
-        output = raw[0].T            # [num_predictions, 84]
-        class_scores = output[:, 4:]
-        class_ids    = class_scores.argmax(axis=1)
-        confidences  = class_scores.max(axis=1)
-
-        mask        = confidences >= _CONF_THRESHOLD
-        output      = output[mask]
-        class_ids   = class_ids[mask]
-        confidences = confidences[mask]
-
-        if len(output) == 0:
-            return []
-
-        # cx, cy, w_box, h_box in _INPUT_SIZE space → scale to original frame
-        scale_x = w / _INPUT_SIZE
-        scale_y = h / _INPUT_SIZE
-
-        cx   = output[:, 0] * scale_x
-        cy   = output[:, 1] * scale_y
-        bw   = output[:, 2] * scale_x
-        bh   = output[:, 3] * scale_y
-
-        x1 = np.clip(cx - bw / 2, 0, w).astype(int)
-        y1 = np.clip(cy - bh / 2, 0, h).astype(int)
-        x2 = np.clip(cx + bw / 2, 0, w).astype(int)
-        y2 = np.clip(cy + bh / 2, 0, h).astype(int)
-
-        boxes_xywh = [[int(x1[i]), int(y1[i]), int(x2[i] - x1[i]), int(y2[i] - y1[i])]
-                      for i in range(len(x1))]
-        indices = cv2.dnn.NMSBoxes(
-            boxes_xywh, confidences.tolist(), _CONF_THRESHOLD, _NMS_THRESHOLD
-        )
-
-        # NMSBoxes returns a flat array in OpenCV ≥4.7, nested in older versions
-        if len(indices) == 0:
-            return []
-        flat = indices.flatten()
-
-        return [
-            {
-                "x1":       int(x1[i]),
-                "y1":       int(y1[i]),
-                "x2":       int(x2[i]),
-                "y2":       int(y2[i]),
-                "conf":     float(confidences[i]),
-                "class_id": int(class_ids[i]),
-            }
-            for i in flat
-        ]
+        return _nms_dedup(all_dets)
 
     except Exception as e:
         print(f"[object_detection] detect_obstacles error: {e}")
@@ -317,14 +403,16 @@ _COCO_LABELS = {
     72: "fridge",   73: "book",     74: "clock",    76: "scissors",
 }
 
-# Populated from config when yolo_class_names is set (custom trained model).
-# Empty list → COCO label fallback used instead.
-_CUSTOM_NAMES: list[str] = OBSTACLE_AVOIDANCE_CFG.get("yolo_class_names", [])
-
 
 def _class_label(class_id: int) -> str:
-    if _CUSTOM_NAMES:
-        return _CUSTOM_NAMES[class_id] if class_id < len(_CUSTOM_NAMES) else f"cls{class_id}"
+    """Resolve a class_id to a display label.
+
+    Priority: per-model class_names from config → COCO labels → "cls<N>".
+    _label_lookup is populated from all enabled models at load time; custom
+    model names (e.g. "obstacle" at id 0) override COCO for debug display.
+    """
+    if class_id in _label_lookup:
+        return _label_lookup[class_id]
     return _COCO_LABELS.get(class_id, f"cls{class_id}")
 
 
@@ -352,7 +440,6 @@ def draw_detections(vis: np.ndarray, detections: list) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import threading
     from http.server import BaseHTTPRequestHandler, HTTPServer
 
     from src.perception.camera import make_camera, capture_bgr  # type: ignore
@@ -435,8 +522,7 @@ if __name__ == "__main__":
                      else "CLEAR")
             if detections:
                 names = ", ".join(
-                    f"{_COCO_LABELS.get(d['class_id'], d['class_id'])} "
-                    f"{d['conf']:.2f}"
+                    f"{_class_label(d['class_id'])} {d['conf']:.2f}"
                     for d in detections
                 )
                 print(f"[{ms:5.0f} ms]  {dist_cm:5.1f} cm [{phase}]  {len(detections)} det: {names}")

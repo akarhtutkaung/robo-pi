@@ -93,6 +93,22 @@ obstacle_avoidance:
                                # Calibrate empirically: place a 30 cm object at 50 cm, measure pixel
                                # width W in the lores frame, then set to (W * 50) / 30.
   camera_hfov_deg: 102        # Pi Camera Module 3 Wide — horizontal FOV (not diagonal)
-  yolo_model: "src/ai/models/yolov8n_320.onnx"  # path relative to project root
-  yolo_input_size: 320        # YOLO network input resolution (px); independent of lores stream size
-  yolo_class_names: []        # empty → COCO label fallback; set to ["obstacle"] after custom training
+
+  # Multi-model list. Each entry is loaded independently; detections are merged via union + NMS.
+  # Set enabled: false to skip a model without removing its entry.
+  yolo_models:
+    - path:        "src/ai/models/yolov8n_320.onnx"   # COCO baseline (80 classes)
+      input_size:  320
+      class_names: []          # empty → COCO label fallback in debug display
+      enabled:     true
+
+    - path:        "src/ai/models/best_320.onnx"       # custom-trained model (from train.ipynb)
+      input_size:  320
+      class_names: []          # set to ["obstacle"] after training
+      enabled:     false       # flip to true once best_320.onnx is deployed to the Pi
+
+  # Deprecated single-model keys — ignored when yolo_models is present; kept so any
+  # code still reading these keys directly does not raise a KeyError.
+  yolo_model:       "src/ai/models/yolov8n_320.onnx"
+  yolo_input_size:  320
+  yolo_class_names: []
