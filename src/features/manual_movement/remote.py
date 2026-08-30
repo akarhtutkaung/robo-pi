@@ -11,6 +11,7 @@ clean shutdown on Ctrl+C or SIGTERM.
 """
 
 import asyncio
+import logging
 import signal
 from src.features.manual_movement.websocket_server import start_server
 from src.components.navigation.controller import RobotController
@@ -19,6 +20,8 @@ from src.features.manual_movement.debug_stream_server import run_debug_stream
 from src.components.camera.camera import make_camera, CameraSwitch
 from src.features.autonomous_detection.object_detection import ObstacleDetector
 from src.components.core.config import CAMERA_CFG, DEBUG_STREAM_CFG
+
+log = logging.getLogger(__name__)
 
 def run():
     controller = RobotController()
@@ -62,11 +65,11 @@ def run():
             await asyncio.gather(*tasks)
         asyncio.run(_run_all())
     except KeyboardInterrupt:
-        print("Shutting down...")
+        log.info("Shutting down...")
     finally:
         if not cleaned_up:
             cleaned_up = True
             controller.cleanup()
             obstacle.cleanup()
             cameras.stop()
-        print("Robot stopped safely.")
+        log.info("Robot stopped safely.")

@@ -14,6 +14,7 @@ Enabled/disabled and port are set in config/hardware.yaml under debug_stream.
 """
 
 import asyncio
+import logging
 import threading
 import time
 import cv2
@@ -24,6 +25,8 @@ from src.features.autonomous_detection.free_space import detect, draw_debug
 from src.features.autonomous_detection.object_detection import (
     detect_obstacles, draw_detections, STOP_CM, TURN_CM,
 )
+
+log = logging.getLogger(__name__)
 
 _JPEG_QUALITY = 75
 
@@ -95,7 +98,7 @@ async def run_debug_stream(camera, obstacle, port: int = 8080, fps: int = 10):
 
     server = HTTPServer(("0.0.0.0", port), _make_handler(shared, lock, fps))
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    print(f"Debug stream: http://<pi-ip>:{port}")
+    log.info("Debug stream: http://<pi-ip>:%s", port)
 
     loop = asyncio.get_running_loop()
     sleep = 1.0 / fps

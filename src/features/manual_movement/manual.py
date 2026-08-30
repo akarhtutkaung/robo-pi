@@ -8,7 +8,10 @@ message is received, so the caller (websocket_server.py) can transition.
 
 import asyncio
 import json
+import logging
 from src.features.manual_movement.handlers.dispatch import handle as dispatch_handle
+
+log = logging.getLogger(__name__)
 
 IDLE_TIMEOUT = 0.3  # seconds before an action is considered stale
 
@@ -54,7 +57,7 @@ async def run_manual(websocket, controller, camera=None) -> str:
         while True:
             try:
                 raw = await asyncio.wait_for(websocket.recv(), timeout=IDLE_TIMEOUT)
-                print(f"Received message: {raw}")
+                log.debug("Received message: %s", raw)
 
                 try:
                     data = json.loads(raw)

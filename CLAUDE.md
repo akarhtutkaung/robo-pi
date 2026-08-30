@@ -78,7 +78,8 @@ robo-pi/
 │       │   └── base.py             # build_response() — shared by all handlers
 │       └── core/
 │           ├── robot.py            # Top-level Robot class — wires all modules together
-│           └── config.py           # Loads hardware.yaml + modes.yaml, exposes named dicts
+│           ├── config.py           # Loads hardware.yaml + modes.yaml, exposes named dicts
+│           └── logger.py           # setup_logging() — rotating file handler + console, call once from main.py
 ├── tests/
 │   ├── conftest.py                # Hardware stubs (gpiozero, picamera2, aiortc…) for non-Pi hosts
 │   ├── test_autonomous_logic.py
@@ -195,6 +196,12 @@ Free-space fallback (`_free_space_avoid`) runs if YOLO finds no detection or the
 - Steer only when `confidence ≥ MIN_CONFIDENCE (0.25)`. Below threshold: `steer_center()`.
 - Steering formula: `steer_angle = round(CENTER_ANGLE - error * STEER_HALF_RANGE)`.
 - Only valid on centre-facing frames. Do not apply free-space steering when the head servo is angled.
+
+### Logging — `src/components/core/logger.py`
+- `setup_logging()` attaches a `RotatingFileHandler` (`logs/robo-pi.log`, 5 MB × 3 backups) plus a console `StreamHandler` to the root logger. Call it once, first thing in `main.py` — every other module just does `log = logging.getLogger(__name__)` and propagates up automatically, no per-module setup needed.
+- `logs/` is created on first run and is gitignored (`*.log` in `.gitignore`); nothing to commit.
+- Idempotent — safe to call more than once (e.g. under pytest re-imports); only the first call attaches handlers.
+- Convention: `log.info` for state changes (connect/disconnect, mode switches, server start), `log.debug` for high-frequency per-message traffic, `log.error`/`log.exception` for failures — `log.exception` (or `exc_info=`) inside an `except` block captures the full traceback in the file.
 
 ---
 

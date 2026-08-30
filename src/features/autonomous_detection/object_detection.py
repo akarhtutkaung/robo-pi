@@ -32,6 +32,7 @@ Debug stream (SSH → browser):
   Press Ctrl+C on the Pi to stop.
 """
 
+import logging
 import math
 import pathlib
 import threading
@@ -41,6 +42,8 @@ import numpy as np
 
 from src.components.core.config import ULTRASONIC_CFG, OBSTACLE_AVOIDANCE_CFG, SERVO_CFG
 from src.components.hardware.sensors.ultrasonic import UltrasonicSensor
+
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # ObstacleDetector — ultrasonic proximity (used by Thread A)
@@ -138,9 +141,9 @@ def _load_models() -> list[dict]:
                 })
                 for idx, name in enumerate(spec["class_names"]):
                     _label_lookup[idx] = name
-                print(f"[object_detection] Loaded model: {spec['path']} @ {spec['input_size']}px")
-            except Exception as e:
-                print(f"[object_detection] Failed to load model {spec['path']}: {e}")
+                log.info("Loaded model: %s @ %spx", spec['path'], spec['input_size'])
+            except Exception:
+                log.exception("Failed to load model %s", spec['path'])
     return _models
 
 
@@ -256,13 +259,13 @@ def detect_obstacles(frame_bgr: np.ndarray) -> list:
         for m in models:
             try:
                 all_dets.extend(_run_single_model(frame_bgr, m["net"], m["input_size"]))
-            except Exception as e:
-                print(f"[object_detection] model inference error: {e}")
+            except Exception:
+                log.exception("model inference error")
 
         return _nms_dedup(all_dets)
 
-    except Exception as e:
-        print(f"[object_detection] detect_obstacles error: {e}")
+    except Exception:
+        log.exception("detect_obstacles error")
         return []
 
 

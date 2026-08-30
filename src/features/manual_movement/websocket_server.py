@@ -12,16 +12,19 @@ Mode switching:
 
 import asyncio
 import json
+import logging
 import websockets
 from src.components.core.config import WS_CFG
 from src.components.comms.base import build_response
 from src.features.manual_movement.manual import run_manual
 from src.features.autonomous_movement.autonomous import run_autonomous
 
+log = logging.getLogger(__name__)
+
 _RECV_TIMEOUT = 0.3  # poll interval while waiting for mode-switch in autonomous mode
 
 async def on_connect(websocket, controller, camera, obstacle):
-    print(f"Client connected: {websocket.remote_address}")
+    log.info("Client connected: %s", websocket.remote_address)
 
     current_mode = "manual"
     autonomous_task: asyncio.Task | None = None
@@ -40,7 +43,7 @@ async def on_connect(websocket, controller, camera, obstacle):
                     autonomous_task = asyncio.create_task(
                         run_autonomous(controller, obstacle, camera, websocket)
                     )
-                    print("[mode] Switched to autonomous")
+                    log.info("[mode] Switched to autonomous")
 
             else:  # autonomous — watch for a switch back to manual, or the loop dying on its own
                 if autonomous_task.done():
@@ -50,7 +53,7 @@ async def on_connect(websocket, controller, camera, obstacle):
                     # fall back to manual instead of sitting halted and unresponsive.
                     exc = autonomous_task.exception()
                     if exc is not None:
-                        print(f"[mode] Autonomous loop exited: {exc}")
+                        log.error("[mode] Autonomous loop exited: %s", exc, exc_info=exc)
                         try:
                             await websocket.send(build_response("error", f"autonomous halted: {exc}"))
                         except websockets.exceptions.ConnectionClosed:
@@ -70,7 +73,7 @@ async def on_connect(websocket, controller, camera, obstacle):
                         autonomous_task = None
                         controller.center_steering()
                         asyncio.create_task(controller.smooth_stop())
-                        print("[mode] Switched to manual")
+                        log.info("[mode] Switched to manual")
                 except (asyncio.TimeoutError, json.JSONDecodeError):
                     pass
 
@@ -80,10 +83,10 @@ async def on_connect(websocket, controller, camera, obstacle):
         if autonomous_task and not autonomous_task.done():
             autonomous_task.cancel()
         controller.center_steering()
-        print(f"Client disconnected: {websocket.remote_address}")
-        print("[!] Stopping robot due to disconnection...")
+        log.info("Client disconnected: %s", websocket.remote_address)
+        log.info("[!] Stopping robot due to disconnection...")
         await controller.smooth_stop()
-        print("[!] Robot stopped.")
+        log.info("[!] Robot stopped.")
 
 
 async def start_server(controller, camera, obstacle):
@@ -95,7 +98,7 @@ async def start_server(controller, camera, obstacle):
         host,
         port
     ) as server:
-        print(f"WebSocket server listening on ws://{host}:{port}")
+        log.info("WebSocket server listening on ws://%s:%s", host, port)
         try:
             await asyncio.Future()
         except asyncio.CancelledError:

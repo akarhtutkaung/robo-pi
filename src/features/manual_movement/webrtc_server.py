@@ -19,12 +19,15 @@ Dependencies: aiortc, websockets
 
 import asyncio
 import json
+import logging
 import websockets
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc.sdp import candidate_from_sdp
 from src.components.core.config import WEBRTC_CFG
 from src.components.camera.camera import CameraVideoTrack
 from src.components.camera.stream import configure_h264
+
+log = logging.getLogger(__name__)
 
 async def on_signaling(websocket, camera, stream_w: int, stream_h: int):
     pc = RTCPeerConnection()
@@ -73,7 +76,7 @@ async def start_webrtc_server(camera, stream_w: int, stream_h: int):
         host,
         port
     ) as server:
-        print(f"WebRTC signaling server listening on ws://{host}:{port}")
+        log.info("WebRTC signaling server listening on ws://%s:%s", host, port)
         try:
             await asyncio.Future()
         except asyncio.CancelledError:
