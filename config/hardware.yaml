@@ -112,3 +112,7 @@ obstacle_avoidance:
   yolo_model:       "src/components/ai/models/yolov8n_320.onnx"
   yolo_input_size:  320
   yolo_class_names: []
+
+face_tracking:
+  cascade_path: ""       # empty = auto-detect (cv2.data.haarcascades, then common apt install paths)
+  min_face_size_px: 60   # ignore detections smaller than this (reduces false positives)

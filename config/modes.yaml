@@ -21,3 +21,12 @@ autonomous:
   sweep_angle_deg: 20  # degrees either side of centre for background sweep
   warn_cm: 60          # slow to approach_speed if YOLO+ultrasonic confirm obstacle within this range
   yolo_block_ratio: 0.25  # min bounding-box width fraction to trigger YOLO-only avoidance for low obstacles
+
+facial_tracking:
+  loop_period_s: 0.1        # target seconds per tracking tick (same cadence as autonomous mode)
+  pan_gain: 0.6             # 0-1 damping applied to the pan (servo1) correction per tick
+  tilt_gain: 0.6            # 0-1 damping applied to the tilt (servo2) correction per tick
+  dead_zone_px: 20          # skip correction once the face center is within this many px of frame center
+  lock_max_jump_px: 200     # max center-to-center jump to keep tracking the same face across ticks
+  lost_face_recenter_after_s: 2.0  # recenter head + drop locked target after this long with no detection
+  invert_tilt: false        # flip if tilt moves the wrong way on first test — verify empirically on the Pi
