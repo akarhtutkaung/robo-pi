@@ -14,6 +14,7 @@ import asyncio
 import json
 import websockets
 from src.components.core.config import WS_CFG
+from src.components.comms.base import build_response
 from src.features.manual_movement.manual import run_manual
 from src.features.autonomous_movement.autonomous import run_autonomous
 
@@ -41,7 +42,24 @@ async def on_connect(websocket, controller, camera, obstacle):
                     )
                     print("[mode] Switched to autonomous")
 
-            else:  # autonomous — only watch for a switch back to manual
+            else:  # autonomous — watch for a switch back to manual, or the loop dying on its own
+                if autonomous_task.done():
+                    # run_autonomous exited on its own (wedged, or too many consecutive
+                    # navigation failures) — retrieve the exception so asyncio doesn't
+                    # log "Task exception was never retrieved", tell the client, and
+                    # fall back to manual instead of sitting halted and unresponsive.
+                    exc = autonomous_task.exception()
+                    if exc is not None:
+                        print(f"[mode] Autonomous loop exited: {exc}")
+                        try:
+                            await websocket.send(build_response("error", f"autonomous halted: {exc}"))
+                        except websockets.exceptions.ConnectionClosed:
+                            pass
+                    current_mode = "manual"
+                    autonomous_task = None
+                    controller.center_steering()
+                    continue
+
                 try:
                     raw = await asyncio.wait_for(websocket.recv(), timeout=_RECV_TIMEOUT)
                     data = json.loads(raw)
