@@ -133,39 +133,35 @@ robo-pi/
 │   ├── hardware.yaml              # GPIO pins, I2C addresses, PWM settings, sensor thresholds
 │   └── modes.yaml                 # Mode-specific tuning (autonomous speeds)
 ├── src/
-│   ├── hardware/                  # Low-level hardware drivers
-│   │   ├── motors.py              # Rear DC motor — smooth accel/decel, dynamic braking
-│   │   ├── servos.py              # Steering + head servos
-│   │   ├── leds.py                # RGB LEDs + WS2812 strip
-│   │   ├── buzzer.py
-│   │   └── sensors/               # Ultrasonic, line, light, battery
-│   ├── perception/                # Sensor data → interpreted signals
-│   │   ├── camera.py              # make_camera(), CameraSwitch, reverse_cam(), CameraVideoTrack, capture_bgr()
-│   │   └── vision/                # stream.py (H.264 config), free_space.py, object_detection.py
-│   ├── navigation/
-│   │   ├── controller.py          # High-level drive commands (forward, steer, smooth_stop)
-│   │   └── slam/                  # Mapping + localization (planned)
-│   ├── ai/                        # On-device model inference (planned)
-│   ├── comms/
-│   │   ├── websocket_server.py    # Control WS server — port 8765
-│   │   ├── webrtc_server.py       # WebRTC signaling WS — port 8766
-│   │   ├── debug_stream_server.py # Combined free-space + YOLO MJPEG stream — port 8080 (dev)
-│   │   ├── protocols/             # Per-domain message schemas
-│   │   │   ├── base.py            # Shared build_response()
-│   │   │   ├── movement.py        # throttle, steer, stop
-│   │   │   ├── vision.py          # camera-x, camera-y
-│   │   │   └── voice.py           # command/text (planned)
-│   │   └── handlers/
-│   │       ├── dispatch.py        # Routes messages by "type" field
-│   │       ├── movement.py        # type: "movement"
-│   │       ├── vision.py          # type: "vision"
-│   │       └── query.py
-│   └── core/
-│       ├── robot.py
-│       ├── config.py              # Loads hardware.yaml + modes.yaml, exposes named constants
-│       └── modes/
-│           ├── remote.py          # Runs control WS + WebRTC signaling concurrently
-│           └── autonomous.py      # Obstacle avoidance loop — perception → decision → action
+│   ├── features/                  # Capability-level slices — the "what the robot does"
+│   │   ├── autonomous_movement/   # Tick loop + avoidance decision/execution
+│   │   │   ├── autonomous.py      # 10 Hz loop, navigate_step, phase dispatch
+│   │   │   └── avoidance.py       # decide_avoidance(), execute_avoidance()
+│   │   ├── autonomous_detection/  # Obstacle sensing/interpretation
+│   │   │   ├── object_detection.py# YOLO detection, sweep_obstacle()
+│   │   │   ├── free_space.py      # Floor-colour passability steering
+│   │   │   └── sweep_cache.py     # Lateral head-sweep cache
+│   │   ├── manual_movement/       # Remote control: WS control + WebRTC + handlers
+│   │   │   ├── remote.py          # Runs control WS + WebRTC signaling concurrently
+│   │   │   ├── manual.py          # Manual-mode message loop
+│   │   │   ├── websocket_server.py# Control WS server — port 8765
+│   │   │   ├── webrtc_server.py   # WebRTC signaling WS — port 8766
+│   │   │   ├── debug_stream_server.py # Free-space + YOLO MJPEG stream — port 8080 (dev)
+│   │   │   ├── protocols/         # Per-domain message schemas (movement, vision, voice)
+│   │   │   └── handlers/          # dispatch.py routes by "type", + movement/vision/query
+│   │   ├── voice_control/         # Speech recognition (planned)
+│   │   ├── slam/                  # Mapping + localization (planned)
+│   │   └── facial_tracking/       # Face tracking (planned)
+│   └── components/                # Shared building blocks used by ≥1 feature
+│       ├── hardware/               # Low-level drivers — motors.py, servos.py, sensors/
+│       ├── camera/                 # camera.py (CameraSwitch, capture_bgr), stream.py (H.264 config)
+│       ├── navigation/
+│       │   └── controller.py      # High-level drive commands (forward, steer, smooth_stop)
+│       ├── comms/
+│       │   └── base.py            # Shared build_response()
+│       ├── ai/                    # On-device model inference (planned) + models/
+│       └── core/
+│           └── config.py          # Loads hardware.yaml + modes.yaml, exposes named constants
 ├── tests/
 └── examples/                      # Adeept reference scripts (read-only)
 ```
@@ -177,11 +173,11 @@ robo-pi/
 | **remote** | WebSocket message → `dispatch.py` → handler → `controller.py` → hardware |
 | **autonomous** | Ultrasonic + camera (YOLO + free-space) → avoidance algorithm → `controller.py` → hardware |
 
-Both modes share the same `hardware/` drivers and `navigation/controller.py`. You can switch between them at runtime via WebSocket without restarting.
+Both modes share the same `components/hardware/` drivers and `components/navigation/controller.py`. You can switch between them at runtime via WebSocket without restarting.
 
 ## Autonomous Obstacle Avoidance
 
-The autonomous loop (`src/core/modes/autonomous.py`) runs at 10 Hz. Every tick the `navigate_step` dispatch checks conditions in priority order:
+The autonomous loop (`src/features/autonomous_movement/autonomous.py`) runs at 10 Hz. Every tick the `navigate_step` dispatch checks conditions in priority order:
 
 | Priority | Condition | Action |
 |----------|-----------|--------|
@@ -223,7 +219,7 @@ The autonomous loop (`src/core/modes/autonomous.py`) runs at 10 Hz. Every tick t
 ## Algorithms
 
 ### Obstacle Detection — Ultrasonic threshold zones
-`src/hardware/sensors/ultrasonic.py` + `autonomous.py`
+`src/components/hardware/sensors/ultrasonic.py` + `autonomous.py`
 
 Distance is read from an HC-SR04 sensor and classified into four zones each loop tick. No state machine or prediction — pure threshold comparison on the raw reading.
 
@@ -235,7 +231,7 @@ Distance is read from an HC-SR04 sensor and classified into four zones each loop
 | Sudden stop | `distance < sudden_stop_cm` (20 cm) | Immediate hard cut |
 
 ### Stopping — Physics-based deceleration rate
-`src/core/modes/autonomous.py` — `navigate_step()`
+`src/features/autonomous_movement/autonomous.py` — `navigate_step()`
 
 When blocked, the required deceleration rate is derived from kinematics rather than a fixed value:
 
@@ -246,7 +242,7 @@ required_rate = v² × cm_per_speed_unit / (2 × d_target)
 where `v` is current speed, `d_target = distance - 5 cm` safety margin. This targets a stop exactly 5 cm from the obstacle regardless of approach speed.
 
 ### Motor speed ramping — Fixed-rate ramp loop
-`src/hardware/motors.py` — `RearMotor._ramp_loop()`
+`src/components/hardware/motors.py` — `RearMotor._ramp_loop()`
 
 Speed changes are applied at 50 Hz. The step size per tick depends on direction:
 
@@ -257,7 +253,7 @@ Speed changes are applied at 50 Hz. The step size per tick depends on direction:
 `smooth_stop()` runs the same loop as an `async` coroutine and blocks until the motor reaches zero.
 
 ### Free-space detection — Floor-colour passability + edge-density penalty
-`src/perception/vision/free_space.py` — `detect(frame)`
+`src/features/autonomous_detection/free_space.py` — `detect(frame)`
 
 Camera steering uses a single-pass OpenCV pipeline. The reference resolution is 640×480 (front camera lores). Frames from the back camera (320×240) are upscaled before processing so the same tuning constants apply to both.
 
@@ -274,7 +270,7 @@ Camera steering uses a single-pass OpenCV pipeline. The reference resolution is 
 No learning, no model weights — entirely classical CV. Requires `MIN_CONFIDENCE ≥ 0.25` before the signal is acted on.
 
 ### Avoidance maneuvers — `execute_avoidance`
-`src/core/modes/autonomous.py` — `execute_avoidance(controller, camera, decision)`
+`src/features/autonomous_movement/autonomous.py` — `execute_avoidance(controller, camera, decision)`
 
 Three maneuvers, selected by `decide_avoidance()`:
 
@@ -343,7 +339,7 @@ Switches the robot between autonomous obstacle-avoidance and manual remote-contr
 
 ## Camera Streaming
 
-The Pi runs two cameras managed by `CameraSwitch` (`src/perception/camera.py`):
+The Pi runs two cameras managed by `CameraSwitch` (`src/components/camera/camera.py`):
 
 | Camera | CSI port | Main stream | Lores (OpenCV) | Used for |
 |--------|----------|-------------|----------------|----------|
@@ -420,7 +416,7 @@ Two standalone MJPEG streams can be run over SSH to inspect perception without t
 
 ### Port 8080 — Combined free-space + YOLO
 
-Served by `src/comms/debug_stream_server.py` when the main system is running, or standalone:
+Served by `src/features/manual_movement/debug_stream_server.py` when the main system is running, or standalone:
 
 ```bash
 # Runs automatically when the system starts (check remote.py)
@@ -432,7 +428,7 @@ Served by `src/comms/debug_stream_server.py` when the main system is running, or
 ### YOLO-only stream
 
 ```bash
-python3 -m src.perception.vision.object_detection
+python3 -m src.features.autonomous_detection.object_detection
 # Open http://<pi-ip>:8080
 ```
 
@@ -442,13 +438,13 @@ Annotates each frame with green YOLO bounding boxes and `class label (conf%)`. P
 
 ```bash
 # MJPEG stream (open http://<pi-ip>:8080)
-python3 -m src.perception.vision.free_space --stream
+python3 -m src.features.autonomous_detection.free_space --stream
 
 # Headless (SSH) — prints error/confidence, saves debug_live.jpg every 30 frames
-python3 -m src.perception.vision.free_space --headless
+python3 -m src.features.autonomous_detection.free_space --headless
 
 # Static image
-python3 -m src.perception.vision.free_space path/to/frame.jpg
+python3 -m src.features.autonomous_detection.free_space path/to/frame.jpg
 ```
 
 ## Planned Features
@@ -456,7 +452,7 @@ python3 -m src.perception.vision.free_space path/to/frame.jpg
 - Hand gesture control
 - SLAM (simultaneous localization and mapping)
 - Speech recognition via `sherpa-ncnn`
-- AI inference (`src/ai/inference.py`)
+- AI inference (`src/components/ai/inference.py`)
 
 ## Dependencies
 

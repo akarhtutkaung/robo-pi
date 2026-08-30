@@ -1,5 +1,5 @@
 """
-Tests for src/perception/vision/object_detection.py
+Tests for src/features/autonomous_detection/object_detection.py
 
 Hardware-free: UltrasonicSensor is never instantiated.
 sweep_obstacle tests use FakeController / FakeSensor.
@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 import pytest
 
-from src.perception.vision.object_detection import (
+from src.features.autonomous_detection.object_detection import (
     detect_obstacles,
     select_primary_obstacle,
     classify_width_threat,
@@ -18,7 +18,7 @@ from src.perception.vision.object_detection import (
     draw_detections,
     _COCO_LABELS,
 )
-from src.core.config import SERVO_CFG
+from src.components.core.config import SERVO_CFG
 
 _SERVO1_MIN = SERVO_CFG["servo1"]["max_angle"]   # 0   — full right (smallest angle)
 _SERVO1_MAX = SERVO_CFG["servo1"]["min_angle"]   # 180 — full left  (largest angle)

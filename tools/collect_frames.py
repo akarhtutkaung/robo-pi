@@ -24,8 +24,8 @@ import cv2
 _ROOT = pathlib.Path(__file__).parent.parent
 sys.path.insert(0, str(_ROOT))
 
-from src.perception.camera import make_camera, capture_bgr  # noqa: E402
-from src.core.config import CAMERA_CFG                      # noqa: E402
+from src.components.camera.camera import make_camera, capture_bgr  # noqa: E402
+from src.components.core.config import CAMERA_CFG                      # noqa: E402
 
 
 def _parse_args():

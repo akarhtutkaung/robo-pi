@@ -1,6 +1,6 @@
 # hardware.yaml
 # Central config for all hardware pin assignments and I2C addresses.
-# Load this in src/core/config.py and pass values down to hardware modules.
+# Load this in src/components/core/config.py and pass values down to hardware modules.
 # Never hardcode pins in hardware files — always read from here.
 
 pca9685:
@@ -97,18 +97,18 @@ obstacle_avoidance:
   # Multi-model list. Each entry is loaded independently; detections are merged via union + NMS.
   # Set enabled: false to skip a model without removing its entry.
   yolo_models:
-    - path:        "src/ai/models/yolov8n_320.onnx"   # COCO baseline (80 classes)
+    - path:        "src/components/ai/models/yolov8n_320.onnx"   # COCO baseline (80 classes)
       input_size:  320
       class_names: []          # empty → COCO label fallback in debug display
       enabled:     true
 
-    - path:        "src/ai/models/best_320.onnx"       # custom-trained model (from train.ipynb)
+    - path:        "src/components/ai/models/best_320.onnx"       # custom-trained model (from train.ipynb)
       input_size:  320
       class_names: []          # set to ["obstacle"] after training
       enabled:     false       # flip to true once best_320.onnx is deployed to the Pi
 
   # Deprecated single-model keys — ignored when yolo_models is present; kept so any
   # code still reading these keys directly does not raise a KeyError.
-  yolo_model:       "src/ai/models/yolov8n_320.onnx"
+  yolo_model:       "src/components/ai/models/yolov8n_320.onnx"
   yolo_input_size:  320
   yolo_class_names: []

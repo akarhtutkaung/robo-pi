@@ -360,7 +360,7 @@ All timing constants live in `config/modes.yaml` (`turn_drive_s`, `kturn_*`) so 
 
 ## 13. Free-Space Steering (Clear Phase, Centre Frames Only)
 
-`src/perception/vision/free_space.py` — `detect(frame) → (error, confidence)`
+`src/features/autonomous_detection/free_space.py` — `detect(frame) → (error, confidence)`
 
 Floor-colour passability + edge-density penalty, entirely classical CV:
 

@@ -36,31 +36,24 @@
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
-│                          main.py                               │  ← entry point
-└──────────────────────────────┬─────────────────────────────────┘
-                               │
-┌──────────────────────────────▼─────────────────────────────────┐
-│                     src/core/modes/                            │  ← operating mode
-│          remote.py          │         (autonomous path         │
-│                             │          wired via websocket)    │
-└──────┬──────────────────────┴──────────────────────────────────┘
-       │
-       ├─────────────────────────┬─────────────────────────────┐
-       │                         │                             │
-┌──────▼──────┐        ┌─────────▼────────┐         ┌──────────▼──────┐
-│  src/comms/ │        │  src/perception/ │         │ src/navigation/ │  ← domain logic
-└──────┬──────┘        └─────────┬────────┘         └──────────┬──────┘
-       │                         │                             │
-       └─────────────────────────┴─────────────────────────────┘
-                                 │
-┌────────────────────────────────▼───────────────────────────────┐
-│                       src/hardware/                            │  ← hardware drivers
-│         motors.py   servos.py   sensors/ultrasonic.py          │
-└────────────────────────────────────────────────────────────────┘
-                                 │
-                     ────────────▼───────────
-                        Physical Hardware
-                     ───────────────────────
+│                          main.py                                │  ← entry point
+└──────────────────────────────┬───────────────────────────────--┘
+                                │
+┌───────────────────────────────▼─────────────────────────────────┐
+│                          src/features/                           │  ← what the robot does
+│  autonomous_movement/  autonomous_detection/  │  manual_movement/ │
+└───────────────┬───────────────────────────────┴─────────┬────────┘
+                │                                          │
+                └───────────────────┬──────────────────────┘
+                                     │
+┌────────────────────────────────────▼─────────────────────────────┐
+│                         src/components/                           │  ← shared building blocks
+│  hardware/     camera/     navigation/controller.py     core/     │
+└────────────────────────────────────┬──────────────────────────────┘
+                                      │
+                          ────────────▼───────────
+                             Physical Hardware
+                          ───────────────────────
 ```
 
 ---
@@ -70,39 +63,54 @@
 ```
 src/
 │
-├── core/
-│   ├── config.py               loads hardware.yaml + modes.yaml once; all other modules import from here
-│   └── modes/
-│       ├── remote.py           entry point for remote mode — owns camera, starts both servers
-│       ├── manual.py           WebSocket recv loop, idle timeout, mode-switch detection
-│       └── autonomous.py       drive loop — reads camera + ultrasonic, outputs steer + throttle
+├── features/                   capability-level slices — what the robot does
+│   │
+│   ├── autonomous_movement/
+│   │   ├── autonomous.py       drive loop — reads camera + ultrasonic, outputs steer + throttle
+│   │   └── avoidance.py        decide_avoidance() / execute_avoidance() — turn/reverse maneuvers
+│   │
+│   ├── autonomous_detection/   raw sensor data → interpreted signals
+│   │   ├── object_detection.py ObstacleDetector — wraps UltrasonicSensor with is_blocked/should_turn
+│   │   ├── free_space.py       detect() — column-wise edge density → (error, confidence)
+│   │   └── sweep_cache.py      _SweepCache — lateral head-sweep cache
+│   │
+│   ├── manual_movement/
+│   │   ├── remote.py           entry point for remote mode — owns camera, starts both servers
+│   │   ├── manual.py           WebSocket recv loop, idle timeout, mode-switch detection
+│   │   ├── websocket_server.py control WebSocket server (port 8765) — mode management
+│   │   ├── webrtc_server.py    WebRTC signaling server (port 8766) — camera stream
+│   │   ├── handlers/
+│   │   │   ├── dispatch.py     routes message by "type" field to domain handler
+│   │   │   ├── movement.py     throttle / steer / stop → controller
+│   │   │   └── vision.py       camera-x / camera-y → controller
+│   │   └── protocols/
+│   │       ├── movement.py     parse throttle/steer/stop messages
+│   │       └── vision.py       parse camera pan/tilt messages
+│   │
+│   ├── voice_control/          planned — stub files only
+│   ├── slam/                   planned — stub files only
+│   ├── facial_tracking/        planned — no code yet
+│   └── gesture_control/        planned — no code yet
 │
-├── hardware/                   talk to physical devices; never imported above navigation/
-│   ├── motors.py               RearMotor — ramped speed, smooth_stop, hard stop
-│   ├── servos.py               ServoController — set/center/clamp angles for servo0/1/2
-│   └── sensors/
-│       └── ultrasonic.py       UltrasonicSensor — GPIO HC-SR04 via gpiozero background thread
-│
-├── perception/                 raw sensor data → interpreted signals
-│   ├── camera.py               make_camera(), capture_bgr(), CameraVideoTrack (aiortc)
-│   └── vision/
-│       ├── free_space.py       detect() — column-wise edge density → (error, confidence)
-│       └── object_detection.py ObstacleDetector — wraps UltrasonicSensor with is_blocked/should_turn
-│
-├── navigation/
-│   └── controller.py           RobotController — single API for all movement; wires motor + servos
-│
-└── comms/
-    ├── websocket_server.py     control WebSocket server (port 8765) — mode management
-    ├── webrtc_server.py        WebRTC signaling server (port 8766) — camera stream
-    ├── handlers/
-    │   ├── dispatch.py         routes message by "type" field to domain handler
-    │   ├── movement.py         throttle / steer / stop → controller
-    │   └── vision.py           camera-x / camera-y → controller
-    └── protocols/
-        ├── base.py             build_response() — standard reply envelope
-        ├── movement.py         parse throttle/steer/stop messages
-        └── vision.py           parse camera pan/tilt messages
+└── components/                 shared building blocks, used by ≥1 feature
+    │
+    ├── hardware/                talk to physical devices; never imported above navigation/
+    │   ├── motors.py            RearMotor — ramped speed, smooth_stop, hard stop
+    │   ├── servos.py            ServoController — set/center/clamp angles for servo0/1/2
+    │   └── sensors/
+    │       └── ultrasonic.py    UltrasonicSensor — GPIO HC-SR04 via gpiozero background thread
+    │
+    ├── camera/
+    │   └── camera.py            make_camera(), capture_bgr(), CameraVideoTrack (aiortc)
+    │
+    ├── navigation/
+    │   └── controller.py        RobotController — single API for all movement; wires motor + servos
+    │
+    ├── comms/
+    │   └── base.py              build_response() — standard reply envelope
+    │
+    └── core/
+        └── config.py            loads hardware.yaml + modes.yaml once; all other modules import from here
 ```
 
 ---
@@ -237,7 +245,7 @@ Each iteration of `navigate_step()` evaluates three states in order:
 
 ## 8. Free-Space Vision Pipeline
 
-`src/perception/vision/free_space.py` — called twice per loop tick (once at block-time, once in clear path).
+`src/features/autonomous_detection/free_space.py` — called twice per loop tick (once at block-time, once in clear path).
 
 ```
 Camera lores stream (320×240 YUV420)
@@ -334,23 +342,23 @@ sequenceDiagram
 ## 11. Hardware Driver Stack
 
 ```
-RobotController  (src/navigation/controller.py)
+RobotController  (src/components/navigation/controller.py)
         │
-        ├── RearMotor  (src/hardware/motors.py)
+        ├── RearMotor  (src/components/hardware/motors.py)
         │       │
         │       │  asyncio ramp loop at 50 Hz
         │       ▼
         │   PCA9685 ch 14/15  →  DC motor
         │
-        └── ServoController  (src/hardware/servos.py)
+        └── ServoController  (src/components/hardware/servos.py)
                 │
                 ├── servo0  ch 0  →  steering  (50° – 140°, centre 94.68°)
                 ├── servo1  ch 1  →  head L/R  (0° – 180°, centre 89.85°)
                 └── servo2  ch 2  →  head U/D  (25° – 120°, centre 69.64°)
 
-ObstacleDetector  (src/perception/vision/object_detection.py)
+ObstacleDetector  (src/features/autonomous_detection/object_detection.py)
         │
-        └── UltrasonicSensor  (src/hardware/sensors/ultrasonic.py)
+        └── UltrasonicSensor  (src/components/hardware/sensors/ultrasonic.py)
                 │
                 │  gpiozero DistanceSensor (background thread, non-blocking)
                 ▼
@@ -387,14 +395,14 @@ force_stop()  — immediate throttle = 0 (emergency only)
 
 ## 13. Config System
 
-Two YAML files, loaded once at startup by `src/core/config.py`. No other file reads YAML directly.
+Two YAML files, loaded once at startup by `src/components/core/config.py`. No other file reads YAML directly.
 
 ```
 config/hardware.yaml         config/modes.yaml
         │                            │
         └──────────┬─────────────────┘
                    │
-           src/core/config.py
+           src/components/core/config.py
                    │
       ┌────────────┼──────────────────┬─────────────────┐
       │            │                  │                  │
@@ -408,14 +416,15 @@ config/hardware.yaml         config/modes.yaml
 
 | Component | File | Status |
 |-----------|------|--------|
-| PID steering controller | `src/navigation/pid.py` | Not started |
+| PID steering controller | `src/components/navigation/pid.py` | Not started |
 | Speed ↔ steering coupling | `autonomous.py` | Not started |
 | Smarter avoidance (steer-and-proceed vs. K-turn) | `autonomous.py` | Not started |
 | Soft collision avoidance (steer without stopping) | `autonomous.py` | Not started |
-| SLAM | `src/navigation/slam/` | Stub files only |
-| Speech recognition | `src/perception/speech/` | Stub files only |
-| Gesture control | `src/perception/vision/gesture.py` | Stub |
-| Line tracking | `src/hardware/sensors/line_tracking.py` | Stub |
-| Light tracking | `src/hardware/sensors/light_tracking.py` | Stub |
-| LEDs / buzzer | `src/hardware/leds.py`, `buzzer.py` | Not created |
-| Battery monitoring | `src/hardware/sensors/battery.py` | Stub |
+| SLAM | `src/features/slam/` | Stub files only |
+| Speech recognition | `src/features/voice_control/` | Stub files only |
+| Gesture control | `src/features/gesture_control/gesture.py` | Stub |
+| Facial tracking | `src/features/facial_tracking/` | No code yet |
+| Line tracking | `src/components/hardware/sensors/line_tracking.py` | Stub |
+| Light tracking | `src/components/hardware/sensors/light_tracking.py` | Stub |
+| LEDs / buzzer | `src/components/hardware/leds.py`, `buzzer.py` | Not created |
+| Battery monitoring | `src/components/hardware/sensors/battery.py` | Stub |

@@ -3,7 +3,7 @@
 ---
 
 ## Task 1: Add obstacle_avoidance config block to hardware.yaml
-**File(s)**: `config/hardware.yaml`, `src/core/config.py`
+**File(s)**: `config/hardware.yaml`, `src/components/core/config.py`
 **Description**: Add the four required constants under a new `obstacle_avoidance:` key in `hardware.yaml`. Expose the block via `config.py` as `OBSTACLE_AVOIDANCE_CFG`.
 ```yaml
 obstacle_avoidance:
@@ -14,29 +14,29 @@ obstacle_avoidance:
 ```
 **Acceptance Criteria**:
 - `hardware.yaml` contains all four keys under `obstacle_avoidance:`
-- `src/core/config.py` exports `OBSTACLE_AVOIDANCE_CFG = _hw["obstacle_avoidance"]`
-- `python3 -c "from src.core.config import OBSTACLE_AVOIDANCE_CFG; print(OBSTACLE_AVOIDANCE_CFG)"` prints the dict without error on the Pi
+- `src/components/core/config.py` exports `OBSTACLE_AVOIDANCE_CFG = _hw["obstacle_avoidance"]`
+- `python3 -c "from src.components.core.config import OBSTACLE_AVOIDANCE_CFG; print(OBSTACLE_AVOIDANCE_CFG)"` prints the dict without error on the Pi
 **Dependencies**: none
 
 ---
 
 ## Task 2: Download and place YOLOv8n ONNX model
-**File(s)**: `src/ai/models/yolov8n_320.onnx`
-**Description**: Export YOLOv8n at `imgsz=320` to ONNX format and copy the file to `src/ai/models/`. Run on a machine with enough RAM/GPU, then `scp` to the Pi.
+**File(s)**: `src/components/ai/models/yolov8n_320.onnx`
+**Description**: Export YOLOv8n at `imgsz=320` to ONNX format and copy the file to `src/components/ai/models/`. Run on a machine with enough RAM/GPU, then `scp` to the Pi.
 ```bash
 pip install ultralytics
 python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt').export(format='onnx', imgsz=320)"
-scp yolov8n.onnx pi@<pi-ip>:~/robo-pi/src/ai/models/yolov8n_320.onnx
+scp yolov8n.onnx pi@<pi-ip>:~/robo-pi/src/components/ai/models/yolov8n_320.onnx
 ```
 **Acceptance Criteria**:
-- File exists at `src/ai/models/yolov8n_320.onnx` on the Pi
-- `python3 -c "import cv2; net = cv2.dnn.readNetFromONNX('src/ai/models/yolov8n_320.onnx'); print('ok')"` succeeds without error
+- File exists at `src/components/ai/models/yolov8n_320.onnx` on the Pi
+- `python3 -c "import cv2; net = cv2.dnn.readNetFromONNX('src/components/ai/models/yolov8n_320.onnx'); print('ok')"` succeeds without error
 **Dependencies**: none
 
 ---
 
 ## Task 3: Implement YOLOv8n inference in object_detection.py
-**File(s)**: `src/perception/vision/object_detection.py`
+**File(s)**: `src/features/autonomous_detection/object_detection.py`
 **Description**: Replace the stub with a working implementation that loads the ONNX model once at module level and exposes a single `detect_obstacles(frame_bgr)` function.
 
 The function must:
@@ -47,7 +47,7 @@ The function must:
 
 Coordinates must be clamped to `[0, frame_width]` / `[0, frame_height]`.
 
-The model path is read from `OBSTACLE_AVOIDANCE_CFG` or falls back to `src/ai/models/yolov8n_320.onnx`.
+The model path is read from `OBSTACLE_AVOIDANCE_CFG` or falls back to `src/components/ai/models/yolov8n_320.onnx`.
 
 **Acceptance Criteria**:
 - `detect_obstacles(frame)` returns `[]` on a blank (black) 640×480 frame without error
@@ -58,7 +58,7 @@ The model path is read from `OBSTACLE_AVOIDANCE_CFG` or falls back to `src/ai/mo
 ---
 
 ## Task 4: Implement obstacle priority selection and threat classification
-**File(s)**: `src/perception/vision/object_detection.py`
+**File(s)**: `src/features/autonomous_detection/object_detection.py`
 **Description**: Add two functions to `object_detection.py` (below `detect_obstacles`):
 
 `select_primary_obstacle(detections, frame_width)` — picks the single highest-priority box from a detection list. Priority = largest bounding-box area; tie-break by smallest horizontal distance from frame centre. Returns the chosen dict, or `None` if list is empty.
@@ -77,7 +77,7 @@ The model path is read from `OBSTACLE_AVOIDANCE_CFG` or falls back to `src/ai/mo
 ---
 
 ## Task 5: Implement pixel_x_to_servo_angle()
-**File(s)**: `src/perception/vision/object_detection.py`
+**File(s)**: `src/features/autonomous_detection/object_detection.py`
 **Description**: Add `pixel_x_to_servo_angle(pixel_x, frame_width=640)` to `object_detection.py`.
 
 Formula:
@@ -98,7 +98,7 @@ Where constants come from `OBSTACLE_AVOIDANCE_CFG` (`camera_hfov_deg`) and `SERV
 ---
 
 ## Task 6: Implement sweep_obstacle() and calculate_real_width()
-**File(s)**: `src/perception/vision/object_detection.py`
+**File(s)**: `src/features/autonomous_detection/object_detection.py`
 **Description**: Add two functions that require hardware access — pass `controller` and `ultrasonic` as arguments (do not import hardware directly).
 
 `sweep_obstacle(controller, ultrasonic, bbox_left_px, bbox_right_px, frame_width=640) -> dict`:
@@ -123,7 +123,7 @@ Where constants come from `OBSTACLE_AVOIDANCE_CFG` (`camera_hfov_deg`) and `SERV
 ---
 
 ## Task 7: Implement decide_avoidance()
-**File(s)**: `src/core/modes/autonomous.py`
+**File(s)**: `src/features/autonomous_movement/autonomous.py`
 **Description**: Add a pure function `decide_avoidance(width_threat: str, sweep: dict) -> str` that returns one of `"TURN_LEFT"`, `"TURN_RIGHT"`, `"REVERSE_AND_TURN"`.
 
 Decision logic:
@@ -142,7 +142,7 @@ Decision logic:
 ---
 
 ## Task 8: Implement execute_avoidance() maneuvers
-**File(s)**: `src/core/modes/autonomous.py`
+**File(s)**: `src/features/autonomous_movement/autonomous.py`
 **Description**: Add `async def execute_avoidance(controller, camera, decision: str)` that maps the three decision strings to concrete motor+servo sequences using existing `controller` methods. Use the same speed constants already imported at the top of `autonomous.py` (`AUTONOMOUS_SPEED`, `REVERSE_SPEED`).
 
 Maneuvers:
@@ -161,7 +161,7 @@ All maneuvers end with `await controller.smooth_stop()` and `controller.steer_ce
 ---
 
 ## Task 9: Wire YOLO detections into navigate_step()
-**File(s)**: `src/core/modes/autonomous.py`
+**File(s)**: `src/features/autonomous_movement/autonomous.py`
 **Description**: Update `navigate_step` to run YOLO when the robot is in `is_blocked()` state, before deciding to K-turn. Replace the current `if conf >= MIN_CONFIDENCE` branch with the full YOLO-informed decision pipeline.
 
 New flow inside `is_blocked()`:
@@ -189,7 +189,7 @@ Constraint: YOLO must not run while servo is moving — the sweep in step (c) mo
 ---
 
 ## Task 10: Add obstacle argument to navigate_step and pass ultrasonic sensor to sweep
-**File(s)**: `src/core/modes/autonomous.py`
+**File(s)**: `src/features/autonomous_movement/autonomous.py`
 **Description**: `sweep_obstacle` needs a reference to the `UltrasonicSensor` instance, which currently lives inside `obstacle._sensor`. Verify that `obstacle._sensor` is accessible from `navigate_step` (it is — `obstacle` is already a parameter). Update the call in Task 9 to pass `obstacle._sensor` directly. No new constructor changes needed if `ObstacleDetector._sensor` is accessible; if it is private and inaccessible, add a `sensor` property to `ObstacleDetector`.
 
 **Acceptance Criteria**:

@@ -1,12 +1,12 @@
 """
-Tests for src/perception/vision/free_space.py
+Tests for src/features/autonomous_detection/free_space.py
 
 All tests use synthetic numpy frames — no camera hardware needed.
 """
 import numpy as np
 import pytest
 
-from src.perception.vision.free_space import (
+from src.features.autonomous_detection.free_space import (
     detect,
     MIN_CONFIDENCE,
     ROI_LEFT, ROI_RIGHT, ROI_TOP, ROI_BOTTOM,

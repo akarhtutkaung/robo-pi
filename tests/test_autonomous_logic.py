@@ -1,5 +1,5 @@
 """
-Tests for src/core/modes/autonomous.py
+Tests for src/features/autonomous_movement/autonomous.py
 
 Covers pure logic (decide_avoidance, _direction_label) and the full
 navigate_step() pipeline with all hardware mocked at the module level.
@@ -11,8 +11,8 @@ import json
 import numpy as np
 import pytest
 
-import src.core.modes.autonomous as auto_mod
-from src.core.modes.autonomous import (
+import src.features.autonomous_movement.autonomous as auto_mod
+from src.features.autonomous_movement.autonomous import (
     decide_avoidance,
     _direction_label,
     AUTONOMOUS_SPEED,
