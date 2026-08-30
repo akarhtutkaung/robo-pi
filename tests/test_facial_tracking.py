@@ -14,6 +14,7 @@ from src.features.facial_tracking.detector import (
 from src.features.facial_tracking.targeting import (
     face_center,
     _face_area,
+    bbox_points,
     select_target,
     compute_new_angles,
     _FRAME_W,
@@ -59,6 +60,16 @@ def test_face_center_and_area():
     box = {"x1": 100, "y1": 50, "x2": 200, "y2": 150}
     assert face_center(box) == (150.0, 100.0)
     assert _face_area(box) == 100 * 100
+
+
+def test_bbox_points_clockwise_from_top_left():
+    box = {"x1": 100, "y1": 50, "x2": 200, "y2": 150}
+    assert bbox_points(box) == [
+        [100, 50],   # top-left
+        [200, 50],   # top-right
+        [200, 150],  # bottom-right
+        [100, 150],  # bottom-left
+    ]
 
 
 # ---------------------------------------------------------------------------

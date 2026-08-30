@@ -18,12 +18,14 @@ Debug (SSH, no app running):
 face_state message format (sent to the client each tick, mirrors
 autonomous.py's drive_state):
     {
-        "type":       "face_state",
-        "tracking":   bool,
-        "pan_angle":  float,
-        "tilt_angle": float,
-        "error_x":    float,   # px offset of face center from frame center, signed
-        "error_y":    float,
+        "type":        "face_state",
+        "tracking":    bool,
+        "pan_angle":   float,
+        "tilt_angle":  float,
+        "error_x":     float,           # px offset of face center from frame center, signed
+        "error_y":     float,
+        "bbox_points": [[x,y], ...] | null,  # 4 corners of the face box, clockwise from
+                                              # top-left — null when tracking is false
     }
 """
 
@@ -38,6 +40,7 @@ from src.components.camera.camera import capture_bgr
 from src.components.core.config import CAMERA_CFG, FACIAL_TRACKING_CFG
 from src.features.facial_tracking.detector import detect_faces, load_cascade
 from src.features.facial_tracking.targeting import (
+    bbox_points,
     compute_new_angles,
     face_center,
     select_target,
@@ -61,10 +64,11 @@ _MAX_CONSECUTIVE_ERRORS = 5
 
 class _TrackerState:
     """Mutable per-session tracking state threaded through the tick loop."""
-    __slots__ = ("target_center", "last_seen", "pan", "tilt")
+    __slots__ = ("target_center", "target_box", "last_seen", "pan", "tilt")
 
     def __init__(self, pan: float, tilt: float):
         self.target_center: tuple[float, float] | None = None
+        self.target_box: dict | None = None  # last detected {x1,y1,x2,y2}, for bbox_points
         self.last_seen: float = time.monotonic()
         self.pan = pan
         self.tilt = tilt
@@ -86,12 +90,14 @@ async def track_step(controller, camera, state: _TrackerState) -> bool:
     if target is None:
         if state.target_center is not None and time.monotonic() - state.last_seen > _LOST_RECENTER_S:
             state.target_center = None
+            state.target_box = None
             state.pan, state.tilt = _SERVO1_CENTER, _SERVO2_CENTER
             controller.center_camera()
         return False
 
     state.last_seen = time.monotonic()
     state.target_center = face_center(target)
+    state.target_box = target
     new_pan, new_tilt = compute_new_angles(state.target_center, state.pan, state.tilt)
     if new_pan != state.pan:
         controller.move_camera_to("x", int(round(new_pan)))
@@ -105,14 +111,18 @@ async def track_step(controller, camera, state: _TrackerState) -> bool:
 async def _send(websocket, tracking: bool, state: _TrackerState, error_x: float, error_y: float):
     if websocket is None:
         return
+    # Only report a box while actually tracking this tick — target_box can be a few
+    # ticks stale (retained for lock continuity across brief misses, see track_step).
+    points = bbox_points(state.target_box) if tracking and state.target_box else None
     try:
         await websocket.send(json.dumps({
-            "type":       "face_state",
-            "tracking":   tracking,
-            "pan_angle":  round(state.pan, 1),
-            "tilt_angle": round(state.tilt, 1),
-            "error_x":    round(error_x, 1),
-            "error_y":    round(error_y, 1),
+            "type":        "face_state",
+            "tracking":    tracking,
+            "pan_angle":   round(state.pan, 1),
+            "tilt_angle":  round(state.tilt, 1),
+            "error_x":     round(error_x, 1),
+            "error_y":     round(error_y, 1),
+            "bbox_points": points,
         }))
     except (ConnectionClosed, OSError):
         pass  # client disconnected — not an error

@@ -45,6 +45,17 @@ def _face_area(box: dict) -> int:
     return (box["x2"] - box["x1"]) * (box["y2"] - box["y1"])
 
 
+def bbox_points(box: dict) -> list[list[int]]:
+    """Corner points of a face box, clockwise from top-left — for a frontend
+    to draw the detection outline: [top-left, top-right, bottom-right, bottom-left].
+
+    detect_faces() already converts OpenCV's (x, y, w, h) rect into this
+    {x1,y1,x2,y2} box, so no separate OpenCV call is needed here.
+    """
+    x1, y1, x2, y2 = box["x1"], box["y1"], box["x2"], box["y2"]
+    return [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
+
+
 def select_target(faces: list[dict], previous_center: tuple[float, float] | None) -> dict | None:
     """Pick which detected face to track this tick.
 
