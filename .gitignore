@@ -7,8 +7,9 @@ venv/
 env/
 
 # AI model weights (can be large)
-src/ai/models/*
-!src/ai/models/.gitkeep
+src/components/ai/models/*
+!src/components/ai/models/.gitkeep
+*.pt
 
 # Logs and output
 *.log
@@ -23,3 +24,4 @@ output.txt
 
 # Environment variables
 .env
+.claude/settings.local.json

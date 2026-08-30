@@ -1,6 +1,6 @@
 import argparse
 import sys
-from src.core.modes.remote import run
+from src.features.manual_movement.remote import run
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Robo-Pi Robot System")

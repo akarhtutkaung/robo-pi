@@ -1,6 +1,6 @@
 # hardware.yaml
 # Central config for all hardware pin assignments and I2C addresses.
-# Load this in src/core/config.py and pass values down to hardware modules.
+# Load this in src/components/core/config.py and pass values down to hardware modules.
 # Never hardcode pins in hardware files — always read from here.
 
 pca9685:
@@ -38,6 +38,11 @@ servos:
     max_angle: 25
     min_angle: 120
 
+debug_stream:
+  enabled: true
+  port: 8080
+  fps: 10
+
 websocket:
   host: "0.0.0.0"     # Listen on all interfaces so Mac can connect over WiFi
   port: 8765
@@ -46,10 +51,64 @@ webrtc:
   host: "0.0.0.0"
   port: 8766           # Signaling WS — WebRTC video negotiation only
 
+cameras:
+  front:
+    index: 0              # Pi Camera V3 Wide Angle — CSI port 0
+    main_width: 1920
+    main_height: 1080
+    lores_width: 640
+    lores_height: 480
+    framerate: 30.0
+  back:
+    index: 1              # Back camera — CSI port 1
+    main_width: 640
+    main_height: 480
+    lores_width: 320
+    lores_height: 240
+    framerate: 30.0
+    rotate_180: true      # Mounted upside down
+
 ultrasonic:
   trigger_pin: 23
   echo_pin: 24
   max_distance: 2   # Maximum distance to measure in m (adjust based on sensor specs)
+  height_cm: 14     # Sensor mount height above ground (5.5 in) — obstacles shorter than this are invisible to the beam
   stop_cm: 30       # Distance at which to stop
   turn_cm: 90       # Distance at which to start slowing down
   sudden_stop_cm: 20  # Distance at which to hard-stop immediately (must be < stop_cm)
+
+ultrasonic_rear:
+  # Separate, physically fixed-mount sensor at the rear of the chassis (NOT the servo1 head sensor).
+  # This sensor does not rotate — it always faces rearward. The servo1 sensor is the forward sweep sensor
+  # managed by _SweepCache; this is an independent sensor on different GPIO pins.
+  trigger_pin:      # GPIO pin — set when rear sensor is installed (leave blank until then)
+  echo_pin:         # GPIO pin — set when rear sensor is installed (leave blank until then)
+  max_distance: 2
+  stop_cm: 20       # stop reversing if rear obstacle detected within this distance
+
+obstacle_avoidance:
+  robot_width_cm: 20          # Measure actual chassis width and update
+  clearance_buffer_cm: 10     # Minimum extra clearance required on each side to attempt passing
+  focal_length_px: 259        # Geometric estimate: (lores_width/2) / tan(hfov_rad/2) = 320/tan(51°).
+                               # Calibrate empirically: place a 30 cm object at 50 cm, measure pixel
+                               # width W in the lores frame, then set to (W * 50) / 30.
+  camera_hfov_deg: 102        # Pi Camera Module 3 Wide — horizontal FOV (not diagonal)
+
+  # Multi-model list. Each entry is loaded independently; detections are merged via union + NMS.
+  # Set enabled: false to skip a model without removing its entry.
+  yolo_models:
+    - path:        "src/components/ai/models/yolov8n_320.onnx"   # COCO baseline (80 classes)
+      input_size:  320
+      class_names: []          # empty → COCO label fallback in debug display
+      enabled:     true
+
+    - path:        "src/components/ai/models/best_320.onnx"       # custom-trained model (from train.ipynb)
+      input_size:  320
+      class_names: []          # set to ["obstacle"] after training
+      enabled:     false       # flip to true once best_320.onnx is deployed to the Pi
+
+  # Deprecated single-model keys — ignored when yolo_models is present; kept so any
+  # code still reading these keys directly does not raise a KeyError.
+  yolo_model:       "src/components/ai/models/yolov8n_320.onnx"
+  yolo_input_size:  320
+  yolo_class_names: []
