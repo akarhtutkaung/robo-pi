@@ -59,6 +59,11 @@ log = logging.getLogger(__name__)
 
 _LOOP_PERIOD     = FACIAL_TRACKING_CFG["loop_period_s"]
 _LOST_RECENTER_S = FACIAL_TRACKING_CFG["lost_face_recenter_after_s"]
+# Below this, skip the hardware write entirely — cheap hobby servos visibly
+# buzz/jiggle when re-commanded every tick for a fraction of a degree, rather
+# than gliding. Gates the write only; compute_new_angles' own state (below)
+# still reflects the actual last-commanded angle either way.
+_MIN_STEP_DEG    = FACIAL_TRACKING_CFG["min_step_deg"]
 
 _MAX_CONSECUTIVE_ERRORS = 5
 
@@ -100,10 +105,10 @@ async def track_step(controller, camera, state: _TrackerState) -> bool:
     state.target_center = face_center(target)
     state.target_box = target
     new_pan, new_tilt = compute_new_angles(state.target_center, state.pan, state.tilt)
-    if new_pan != state.pan:
+    if abs(new_pan - state.pan) >= _MIN_STEP_DEG:
         controller.move_camera_to("x", int(round(new_pan)))
         state.pan = new_pan
-    if new_tilt != state.tilt:
+    if abs(new_tilt - state.tilt) >= _MIN_STEP_DEG:
         controller.move_camera_to("y", int(round(new_tilt)))
         state.tilt = new_tilt
     return True
@@ -136,8 +141,9 @@ async def setup(controller):
     load_detector()  # fail fast, before the loop starts, if no detector can be built
     log.info(
         "Facial tracking: detector=%s pan_gain=%.2f tilt_gain=%.2f dead_zone=%dpx "
-        "max_step=%.1fdeg lock_max_jump=%dpx",
-        detector_name(), _PAN_GAIN, _TILT_GAIN, _DEAD_ZONE_PX, _MAX_STEP_DEG, _LOCK_MAX_JUMP_PX,
+        "max_step=%.1fdeg min_step=%.1fdeg lock_max_jump=%dpx",
+        detector_name(), _PAN_GAIN, _TILT_GAIN, _DEAD_ZONE_PX, _MAX_STEP_DEG, _MIN_STEP_DEG,
+        _LOCK_MAX_JUMP_PX,
     )
 
 

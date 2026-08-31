@@ -1,9 +1,14 @@
 """
-Tests for src/features/facial_tracking/ (detector.py, targeting.py).
+Tests for src/features/facial_tracking/ (detector.py, targeting.py, and
+track_step's hardware-write hysteresis in tracker.py).
 
 Hardware-free: no RobotController, no camera. Detection/geometry functions
-are exercised directly against synthetic inputs.
+are exercised directly against synthetic inputs; track_step tests use a
+MagicMock controller and a monkeypatched capture step.
 """
+import asyncio
+from unittest.mock import MagicMock
+
 import numpy as np
 import pytest
 
@@ -29,6 +34,7 @@ from src.features.facial_tracking.targeting import (
     _DEAD_ZONE_PX,
     _MAX_STEP_DEG,
 )
+from src.features.facial_tracking import tracker as tracker_mod
 from src.components.core.config import SERVO_CFG
 
 _SERVO1_MIN = SERVO_CFG["servo1"]["max_angle"]   # 0   — full right (smallest angle)
@@ -209,3 +215,45 @@ def test_compute_new_angles_limits_large_correction_to_max_step_per_tick():
     face_far_bottom = (_FRAME_W / 2.0, _FRAME_H)
     _, new_tilt = compute_new_angles(face_far_bottom, _SERVO1_CENTER, _SERVO2_CENTER)
     assert abs(new_tilt - _SERVO2_CENTER) == pytest.approx(_MAX_STEP_DEG)
+
+
+# ---------------------------------------------------------------------------
+# track_step — min_step_deg hysteresis on the actual hardware write
+# ---------------------------------------------------------------------------
+
+def _face_box(cx: float, cy: float, size: float = 80.0) -> dict:
+    half = size / 2
+    return {"x1": cx - half, "y1": cy - half, "x2": cx + half, "y2": cy + half, "score": 0.9}
+
+
+def _run_track_step(monkeypatch, faces, state=None):
+    if state is None:
+        state = tracker_mod._TrackerState(tracker_mod._SERVO1_CENTER, tracker_mod._SERVO2_CENTER)
+    monkeypatch.setattr(tracker_mod, "_capture_and_detect", lambda camera: faces)
+    controller = MagicMock()
+    asyncio.run(tracker_mod.track_step(controller, camera=None, state=state))
+    return controller, state
+
+
+def test_track_step_skips_write_for_sub_min_step_correction(monkeypatch):
+    # Offset just past dead_zone_px (21px) produces ~2.78deg of correction —
+    # outside the dead zone, but below min_step_deg (3) — see the comment on
+    # min_step_deg in modes.yaml for why it must exceed the dead-zone-boundary
+    # correction to have any effect at all.
+    face = _face_box(_FRAME_W / 2.0 + _DEAD_ZONE_PX + 1, _FRAME_H / 2.0)
+    controller, state = _run_track_step(monkeypatch, [face])
+    controller.move_camera_to.assert_not_called()
+    # Software state still holds at the un-commanded angle — not left stale
+    # relative to what's actually on the servo.
+    assert state.pan == _SERVO1_CENTER
+
+
+def test_track_step_writes_for_correction_past_min_step(monkeypatch):
+    # A clearly larger offset (30px) produces ~3.96deg — past min_step_deg.
+    face = _face_box(_FRAME_W / 2.0 + 30, _FRAME_H / 2.0)
+    controller, state = _run_track_step(monkeypatch, [face])
+    controller.move_camera_to.assert_called_once()
+    axis, angle = controller.move_camera_to.call_args[0]
+    assert axis == "x"
+    assert state.pan != _SERVO1_CENTER
+    assert angle == int(round(state.pan))  # what's written matches what's tracked
