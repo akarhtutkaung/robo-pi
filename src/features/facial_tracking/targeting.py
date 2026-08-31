@@ -8,12 +8,6 @@ largest box, so tracking doesn't flicker between multiple faces in view.
 Falls back to the largest box on first acquisition or after losing the
 target.
 
-"Smoothing": smooth_center EMA-filters the detected center before it drives
-compute_new_angles, so per-frame detector noise doesn't get amplified by
-pan_gain/tilt_gain into visible pan/tilt twitch (tracker.py keeps this
-smoothed value separate from the raw target_center used for locking and
-status reporting).
-
 Angle correction (compute_new_angles) is applied relative to the servo's
 *current* angle, not an absolute frame-centered angle — each frame is
 captured from wherever the head currently points, unlike
@@ -29,7 +23,7 @@ from src.components.core.config import (
 _PAN_GAIN         = FACIAL_TRACKING_CFG["pan_gain"]
 _TILT_GAIN        = FACIAL_TRACKING_CFG["tilt_gain"]
 _DEAD_ZONE_PX     = FACIAL_TRACKING_CFG["dead_zone_px"]
-_SMOOTHING_ALPHA  = FACIAL_TRACKING_CFG["smoothing_alpha"]
+_MAX_STEP_DEG     = FACIAL_TRACKING_CFG["max_step_deg"]
 _LOCK_MAX_JUMP_PX = FACIAL_TRACKING_CFG["lock_max_jump_px"]
 _INVERT_TILT      = FACIAL_TRACKING_CFG["invert_tilt"]
 
@@ -89,33 +83,24 @@ def select_target(faces: list[dict], previous_center: tuple[float, float] | None
     return max(faces, key=_face_area)
 
 
-def smooth_center(
-    raw_center: tuple[float, float],
-    previous_smoothed: tuple[float, float] | None,
-) -> tuple[float, float]:
-    """Exponential moving average over the detected face center, applied
-    before compute_new_angles.
+def _clamp_step(current: float, target: float, max_step: float) -> float:
+    """Rate-limit current -> target to at most max_step per call.
 
-    A raw per-frame center wobbles by a few px even for a stationary face
-    (detector noise, more so on the cascade fallback). Fed straight into
-    compute_new_angles, that noise gets amplified by pan_gain/tilt_gain into
-    visible servo twitch — worst right at the dead_zone_px boundary, where a
-    few px of noise flips correction on and off every tick. Smoothing the
-    center first turns that into a low-pass-filtered signal that crosses the
-    boundary far less often.
-
-    previous_smoothed is None on first acquisition (right after
-    select_target picks a fresh target) — start from the raw center rather
-    than easing in from nothing.
+    Without this, a large offset (e.g. right after acquisition, or a fast
+    head turn) produces a correction of gain * atan(offset/focal) in a
+    single tick — easily 15-30 deg — snapping the servo instantly rather
+    than gliding. The servo overshoots/vibrates settling from the snap, and
+    by the time it does the next tick has already re-targeted it again,
+    which reads as jiggering rather than smooth tracking. Capping the step
+    spreads a big correction over several ticks instead, mirroring how
+    motors.py ramps speed rather than snapping it.
     """
-    if previous_smoothed is None:
-        return raw_center
-    px, py = previous_smoothed
-    rx, ry = raw_center
-    return (
-        px + _SMOOTHING_ALPHA * (rx - px),
-        py + _SMOOTHING_ALPHA * (ry - py),
-    )
+    delta = target - current
+    if delta > max_step:
+        delta = max_step
+    elif delta < -max_step:
+        delta = -max_step
+    return current + delta
 
 
 def compute_new_angles(
@@ -129,7 +114,9 @@ def compute_new_angles(
     from wherever the head currently points, not from a centered reference.
     Per-tick damping (pan_gain/tilt_gain) keeps cascade detection jitter from
     translating into servo twitch; the dead zone stops correcting once
-    already close to centered.
+    already close to centered; max_step_deg (_clamp_step) rate-limits how
+    far a single tick may move the servo so a large offset is glided toward
+    over several ticks instead of snapped to in one.
     """
     cx, cy = face_center_px
     offset_x = cx - _FRAME_W / 2.0
@@ -140,12 +127,14 @@ def compute_new_angles(
     if abs(offset_x) > _DEAD_ZONE_PX:
         pan_delta_deg = math.degrees(math.atan2(offset_x, _FOCAL_LENGTH_PX))
         # servo1: decreasing angle = right (matches pixel_x_to_servo_angle's sign convention)
-        new_pan = current_pan - _PAN_GAIN * pan_delta_deg
+        target_pan = current_pan - _PAN_GAIN * pan_delta_deg
+        new_pan = _clamp_step(current_pan, target_pan, _MAX_STEP_DEG)
 
     if abs(offset_y) > _DEAD_ZONE_PX:
         tilt_delta_deg = math.degrees(math.atan2(offset_y, _FOCAL_LENGTH_PX))
         sign = 1.0 if _INVERT_TILT else -1.0
-        new_tilt = current_tilt + sign * _TILT_GAIN * tilt_delta_deg
+        target_tilt = current_tilt + sign * _TILT_GAIN * tilt_delta_deg
+        new_tilt = _clamp_step(current_tilt, target_tilt, _MAX_STEP_DEG)
 
     new_pan = max(_SERVO1_CFG["max_angle"], min(_SERVO1_CFG["min_angle"], new_pan))
     new_tilt = max(_SERVO2_CFG["max_angle"], min(_SERVO2_CFG["min_angle"], new_tilt))
