@@ -22,11 +22,13 @@ from src.features.facial_tracking.targeting import (
     bbox_points,
     select_target,
     compute_new_angles,
+    smooth_center,
     _FRAME_W,
     _FRAME_H,
     _SERVO1_CENTER,
     _SERVO2_CENTER,
     _DEAD_ZONE_PX,
+    _SMOOTHING_ALPHA,
 )
 from src.components.core.config import SERVO_CFG
 
@@ -193,3 +195,43 @@ def test_compute_new_angles_clamps_to_servo_range():
     face_at_top_edge = (_FRAME_W / 2.0, 0.0)
     _, new_tilt = compute_new_angles(face_at_top_edge, _SERVO1_CENTER, _SERVO2_MAX - 2)
     assert new_tilt == _SERVO2_MAX
+
+
+# ---------------------------------------------------------------------------
+# smooth_center — EMA filter that absorbs per-frame detector noise before it
+# reaches compute_new_angles
+# ---------------------------------------------------------------------------
+
+def test_smooth_center_first_reading_passes_through_unfiltered():
+    # previous_smoothed=None means this is a fresh acquisition — start exactly
+    # at the raw center rather than easing in from some assumed prior point.
+    raw = (123.0, 45.0)
+    assert smooth_center(raw, None) == raw
+
+
+def test_smooth_center_moves_toward_raw_by_alpha():
+    previous = (100.0, 100.0)
+    raw = (200.0, 100.0)
+    smoothed_x, smoothed_y = smooth_center(raw, previous)
+    assert smoothed_x == pytest.approx(100.0 + _SMOOTHING_ALPHA * 100.0)
+    assert smoothed_y == pytest.approx(100.0)
+
+
+def test_smooth_center_damps_single_frame_noise_spike():
+    # A steady previous value plus one noisy outlier reading should land much
+    # closer to the steady value than the raw jump does — this is the whole
+    # point: one bad detection shouldn't swing the servo target by its full size.
+    previous = (160.0, 120.0)
+    noisy_outlier = (260.0, 120.0)
+    smoothed_x, _ = smooth_center(noisy_outlier, previous)
+    raw_jump = abs(noisy_outlier[0] - previous[0])
+    smoothed_jump = abs(smoothed_x - previous[0])
+    assert smoothed_jump < raw_jump
+
+
+def test_smooth_center_converges_to_steady_raw_value_over_repeated_ticks():
+    previous = None
+    raw = (300.0, 200.0)
+    for _ in range(50):
+        previous = smooth_center(raw, previous)
+    assert previous == pytest.approx(raw)

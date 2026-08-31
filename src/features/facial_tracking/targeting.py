@@ -8,6 +8,12 @@ largest box, so tracking doesn't flicker between multiple faces in view.
 Falls back to the largest box on first acquisition or after losing the
 target.
 
+"Smoothing": smooth_center EMA-filters the detected center before it drives
+compute_new_angles, so per-frame detector noise doesn't get amplified by
+pan_gain/tilt_gain into visible pan/tilt twitch (tracker.py keeps this
+smoothed value separate from the raw target_center used for locking and
+status reporting).
+
 Angle correction (compute_new_angles) is applied relative to the servo's
 *current* angle, not an absolute frame-centered angle — each frame is
 captured from wherever the head currently points, unlike
@@ -23,6 +29,7 @@ from src.components.core.config import (
 _PAN_GAIN         = FACIAL_TRACKING_CFG["pan_gain"]
 _TILT_GAIN        = FACIAL_TRACKING_CFG["tilt_gain"]
 _DEAD_ZONE_PX     = FACIAL_TRACKING_CFG["dead_zone_px"]
+_SMOOTHING_ALPHA  = FACIAL_TRACKING_CFG["smoothing_alpha"]
 _LOCK_MAX_JUMP_PX = FACIAL_TRACKING_CFG["lock_max_jump_px"]
 _INVERT_TILT      = FACIAL_TRACKING_CFG["invert_tilt"]
 
@@ -80,6 +87,35 @@ def select_target(faces: list[dict], previous_center: tuple[float, float] | None
             return closest
 
     return max(faces, key=_face_area)
+
+
+def smooth_center(
+    raw_center: tuple[float, float],
+    previous_smoothed: tuple[float, float] | None,
+) -> tuple[float, float]:
+    """Exponential moving average over the detected face center, applied
+    before compute_new_angles.
+
+    A raw per-frame center wobbles by a few px even for a stationary face
+    (detector noise, more so on the cascade fallback). Fed straight into
+    compute_new_angles, that noise gets amplified by pan_gain/tilt_gain into
+    visible servo twitch — worst right at the dead_zone_px boundary, where a
+    few px of noise flips correction on and off every tick. Smoothing the
+    center first turns that into a low-pass-filtered signal that crosses the
+    boundary far less often.
+
+    previous_smoothed is None on first acquisition (right after
+    select_target picks a fresh target) — start from the raw center rather
+    than easing in from nothing.
+    """
+    if previous_smoothed is None:
+        return raw_center
+    px, py = previous_smoothed
+    rx, ry = raw_center
+    return (
+        px + _SMOOTHING_ALPHA * (rx - px),
+        py + _SMOOTHING_ALPHA * (ry - py),
+    )
 
 
 def compute_new_angles(
