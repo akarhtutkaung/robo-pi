@@ -39,6 +39,14 @@ facial_tracking:
                              # smallest correction possible the instant a face crosses outside the dead
                              # zone — ~2.65deg at these defaults) or it has no effect at all; re-check this
                              # if you retune dead_zone_px, pan_gain/tilt_gain, or focal_length_px.
+  smoothing_alpha: 0.5      # EMA weight (0-1) on each new detected face center before it drives the
+                             # servo correction — lower = smoother/slower, higher = more responsive/noisier.
+                             # The detected box is noticeably less stable while a face is actively moving
+                             # or turning (motion blur, box shifting as yaw changes) than while static —
+                             # unfiltered, that shows up as a rapid stutter while chasing even though a
+                             # still face converges and holds cleanly. 0.5 is deliberately lighter than an
+                             # earlier 0.4 attempt that read as sluggish — that was compounded by
+                             # max_step_deg being too low (3) at the time, since fixed independently.
   lock_max_jump_px: 200     # max center-to-center jump to keep tracking the same face across ticks
   lost_face_recenter_after_s: 2.0  # recenter head + drop locked target after this long with no detection
   invert_tilt: false        # flip if tilt moves the wrong way on first test — verify empirically on the Pi

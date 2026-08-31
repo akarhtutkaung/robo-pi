@@ -8,6 +8,15 @@ largest box, so tracking doesn't flicker between multiple faces in view.
 Falls back to the largest box on first acquisition or after losing the
 target.
 
+"Smoothing": smooth_center EMA-filters the detected center before it drives
+compute_new_angles. The raw box position is noticeably less stable while a
+face is actively moving/turning (motion blur, and a pose-tolerant detector's
+box shifting asymmetrically as yaw changes) than while it's static — fed
+straight into the control loop, that extra noise reads as a rapid stutter
+while tracking movement, even though a still face converges and holds
+cleanly (see tracker.py, which keeps this smoothed value separate from the
+raw target_center used for locking and status reporting).
+
 Angle correction (compute_new_angles) is applied relative to the servo's
 *current* angle, not an absolute frame-centered angle — each frame is
 captured from wherever the head currently points, unlike
@@ -24,6 +33,7 @@ _PAN_GAIN         = FACIAL_TRACKING_CFG["pan_gain"]
 _TILT_GAIN        = FACIAL_TRACKING_CFG["tilt_gain"]
 _DEAD_ZONE_PX     = FACIAL_TRACKING_CFG["dead_zone_px"]
 _MAX_STEP_DEG     = FACIAL_TRACKING_CFG["max_step_deg"]
+_SMOOTHING_ALPHA  = FACIAL_TRACKING_CFG["smoothing_alpha"]
 _LOCK_MAX_JUMP_PX = FACIAL_TRACKING_CFG["lock_max_jump_px"]
 _INVERT_TILT      = FACIAL_TRACKING_CFG["invert_tilt"]
 
@@ -81,6 +91,27 @@ def select_target(faces: list[dict], previous_center: tuple[float, float] | None
             return closest
 
     return max(faces, key=_face_area)
+
+
+def smooth_center(
+    raw_center: tuple[float, float],
+    previous_smoothed: tuple[float, float] | None,
+) -> tuple[float, float]:
+    """Exponential moving average over the detected face center, applied
+    before compute_new_angles — see the module docstring's "Smoothing" note.
+
+    previous_smoothed is None on first acquisition (right after
+    select_target picks a fresh target) — start from the raw center rather
+    than easing in from nothing.
+    """
+    if previous_smoothed is None:
+        return raw_center
+    px, py = previous_smoothed
+    rx, ry = raw_center
+    return (
+        px + _SMOOTHING_ALPHA * (rx - px),
+        py + _SMOOTHING_ALPHA * (ry - py),
+    )
 
 
 def _clamp_step(current: float, target: float, max_step: float) -> float:

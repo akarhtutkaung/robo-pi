@@ -44,6 +44,7 @@ from src.features.facial_tracking.targeting import (
     compute_new_angles,
     face_center,
     select_target,
+    smooth_center,
     _DEAD_ZONE_PX,
     _FRAME_H,
     _FRAME_W,
@@ -52,6 +53,7 @@ from src.features.facial_tracking.targeting import (
     _PAN_GAIN,
     _SERVO1_CENTER,
     _SERVO2_CENTER,
+    _SMOOTHING_ALPHA,
     _TILT_GAIN,
 )
 
@@ -70,10 +72,14 @@ _MAX_CONSECUTIVE_ERRORS = 5
 
 class _TrackerState:
     """Mutable per-session tracking state threaded through the tick loop."""
-    __slots__ = ("target_center", "target_box", "last_seen", "pan", "tilt")
+    __slots__ = ("target_center", "smoothed_center", "target_box", "last_seen", "pan", "tilt")
 
     def __init__(self, pan: float, tilt: float):
         self.target_center: tuple[float, float] | None = None
+        # EMA-smoothed version of target_center, used only for the servo angle
+        # correction (see targeting.smooth_center) — target_center itself stays
+        # raw for lock matching and the face_state error_x/error_y report.
+        self.smoothed_center: tuple[float, float] | None = None
         self.target_box: dict | None = None  # last detected {x1,y1,x2,y2}, for bbox_points
         self.last_seen: float = time.monotonic()
         self.pan = pan
@@ -96,6 +102,7 @@ async def track_step(controller, camera, state: _TrackerState) -> bool:
     if target is None:
         if state.target_center is not None and time.monotonic() - state.last_seen > _LOST_RECENTER_S:
             state.target_center = None
+            state.smoothed_center = None
             state.target_box = None
             state.pan, state.tilt = _SERVO1_CENTER, _SERVO2_CENTER
             controller.center_camera()
@@ -103,8 +110,9 @@ async def track_step(controller, camera, state: _TrackerState) -> bool:
 
     state.last_seen = time.monotonic()
     state.target_center = face_center(target)
+    state.smoothed_center = smooth_center(state.target_center, state.smoothed_center)
     state.target_box = target
-    new_pan, new_tilt = compute_new_angles(state.target_center, state.pan, state.tilt)
+    new_pan, new_tilt = compute_new_angles(state.smoothed_center, state.pan, state.tilt)
     if abs(new_pan - state.pan) >= _MIN_STEP_DEG:
         controller.move_camera_to("x", int(round(new_pan)))
         state.pan = new_pan
@@ -141,9 +149,9 @@ async def setup(controller):
     load_detector()  # fail fast, before the loop starts, if no detector can be built
     log.info(
         "Facial tracking: detector=%s pan_gain=%.2f tilt_gain=%.2f dead_zone=%dpx "
-        "max_step=%.1fdeg min_step=%.1fdeg lock_max_jump=%dpx",
+        "max_step=%.1fdeg min_step=%.1fdeg smoothing_alpha=%.2f lock_max_jump=%dpx",
         detector_name(), _PAN_GAIN, _TILT_GAIN, _DEAD_ZONE_PX, _MAX_STEP_DEG, _MIN_STEP_DEG,
-        _LOCK_MAX_JUMP_PX,
+        _SMOOTHING_ALPHA, _LOCK_MAX_JUMP_PX,
     )
 
 

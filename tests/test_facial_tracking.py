@@ -7,6 +7,7 @@ are exercised directly against synthetic inputs; track_step tests use a
 MagicMock controller and a monkeypatched capture step.
 """
 import asyncio
+import time
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -27,12 +28,14 @@ from src.features.facial_tracking.targeting import (
     bbox_points,
     select_target,
     compute_new_angles,
+    smooth_center,
     _FRAME_W,
     _FRAME_H,
     _SERVO1_CENTER,
     _SERVO2_CENTER,
     _DEAD_ZONE_PX,
     _MAX_STEP_DEG,
+    _SMOOTHING_ALPHA,
 )
 from src.features.facial_tracking import tracker as tracker_mod
 from src.components.core.config import SERVO_CFG
@@ -257,3 +260,60 @@ def test_track_step_writes_for_correction_past_min_step(monkeypatch):
     assert axis == "x"
     assert state.pan != _SERVO1_CENTER
     assert angle == int(round(state.pan))  # what's written matches what's tracked
+
+
+# ---------------------------------------------------------------------------
+# smooth_center — EMA filter that damps the raw detection box's frame-to-frame
+# instability (worse while a face is moving/turning) before it reaches
+# compute_new_angles
+# ---------------------------------------------------------------------------
+
+def test_smooth_center_first_reading_passes_through_unfiltered():
+    # previous_smoothed=None means this is a fresh acquisition — start exactly
+    # at the raw center rather than easing in from some assumed prior point.
+    raw = (123.0, 45.0)
+    assert smooth_center(raw, None) == raw
+
+
+def test_smooth_center_moves_toward_raw_by_alpha():
+    previous = (100.0, 100.0)
+    raw = (200.0, 100.0)
+    smoothed_x, smoothed_y = smooth_center(raw, previous)
+    assert smoothed_x == pytest.approx(100.0 + _SMOOTHING_ALPHA * 100.0)
+    assert smoothed_y == pytest.approx(100.0)
+
+
+def test_smooth_center_damps_single_frame_noise_spike():
+    # A steady previous value plus one noisy outlier reading should land much
+    # closer to the steady value than the raw jump does — this is the whole
+    # point: one bad detection shouldn't swing the servo target by its full size.
+    previous = (160.0, 120.0)
+    noisy_outlier = (260.0, 120.0)
+    smoothed_x, _ = smooth_center(noisy_outlier, previous)
+    raw_jump = abs(noisy_outlier[0] - previous[0])
+    smoothed_jump = abs(smoothed_x - previous[0])
+    assert smoothed_jump < raw_jump
+
+
+def test_smooth_center_converges_to_steady_raw_value_over_repeated_ticks():
+    previous = None
+    raw = (300.0, 200.0)
+    for _ in range(50):
+        previous = smooth_center(raw, previous)
+    assert previous == pytest.approx(raw)
+
+
+def test_track_step_resets_smoothing_after_target_lost_and_recentered(monkeypatch):
+    # A stale smoothed_center from a previous target must not leak into a
+    # fresh acquisition after the lost-face recenter — this drives one state
+    # object through both phases rather than using the fresh-state helper.
+    state = tracker_mod._TrackerState(tracker_mod._SERVO1_CENTER, tracker_mod._SERVO2_CENTER)
+    face = _face_box(_FRAME_W / 2.0 + 30, _FRAME_H / 2.0)
+    controller, state = _run_track_step(monkeypatch, [face], state=state)
+    assert state.smoothed_center is not None
+
+    # Face vanishes and the recenter timeout has already elapsed.
+    monkeypatch.setattr(tracker_mod, "_capture_and_detect", lambda camera: [])
+    state.last_seen = time.monotonic() - tracker_mod._LOST_RECENTER_S - 1
+    asyncio.run(tracker_mod.track_step(controller, camera=None, state=state))
+    assert state.smoothed_center is None
