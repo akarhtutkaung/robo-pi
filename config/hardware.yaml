@@ -114,5 +114,19 @@ obstacle_avoidance:
   yolo_class_names: []
 
 face_tracking:
-  cascade_path: ""       # empty = auto-detect (cv2.data.haarcascades, then common apt install paths)
+  detector: "auto"       # auto = YuNet if its model is deployed, else Haar cascades.
+                         # "yunet" forces YuNet (startup error if missing); "cascade" forces Haar.
   min_face_size_px: 60   # ignore detections smaller than this (reduces false positives)
+
+  # YuNet — the pose-tolerant detector. Holds a face through head turn (yaw) and
+  # tilt (roll), which the frontal Haar cascade cannot. ~340 KB; deploy with setup.sh's
+  # curl + scp step. Gitignored like the YOLO weights.
+  yunet_model: "src/components/ai/models/face_detection_yunet.onnx"
+  yunet_score_threshold: 0.6   # raise if you get false positives, lower if faces at an angle drop out
+  yunet_nms_threshold: 0.3
+  yunet_top_k: 50
+
+  # Haar cascade fallback — used only when YuNet is unavailable.
+  # Empty = auto-detect (cv2.data.haarcascades, then common apt install paths).
+  cascade_path: ""           # haarcascade_frontalface_default.xml
+  profile_cascade_path: ""   # haarcascade_profileface.xml — recovers faces turned left/right

@@ -52,7 +52,7 @@ robo-pi/
 │   │   │   ├── mapper.py          # Build and update map (planned)
 │   │   │   └── localizer.py       # Estimate position within map (planned)
 │   │   ├── facial_tracking/       # Pan/tilt head servos to keep a detected face centered
-│   │   │   ├── detector.py        # Haar cascade loading + detect_faces()
+│   │   │   ├── detector.py        # detect_faces() — YuNet ONNX, Haar cascade ensemble fallback
 │   │   │   ├── targeting.py       # select_target() lock-on policy, compute_new_angles()
 │   │   │   └── tracker.py         # Tick loop, websocket status, CLI harness (entry point)
 │   │   └── gesture_control/       # Hand gesture → movement command (planned, no code yet)
@@ -209,7 +209,11 @@ Free-space fallback (`_free_space_avoid`) runs if YOLO finds no detection or the
 - Convention: `log.info` for state changes (connect/disconnect, mode switches, server start), `log.debug` for high-frequency per-message traffic, `log.error`/`log.exception` for failures — `log.exception` (or `exc_info=`) inside an `except` block captures the full traceback in the file.
 
 ### Facial tracking — `src/features/facial_tracking/{detector,targeting,tracker}.py`
-- `detector.py`: `detect_faces(frame)` → list of `{x1,y1,x2,y2}` via `cv2.CascadeClassifier` (`haarcascade_frontalface_default.xml`) — no model file to source; `_resolve_cascade_path()` tries a `hardware.yaml` override, then `cv2.data.haarcascades`, then common apt install paths.
+- `detector.py`: `detect_faces(frame)` → list of `{x1,y1,x2,y2,score}`. Two backends, chosen once by `_select_backend()` and reported by `detector_name()`:
+  - **YuNet** (`cv2.FaceDetectorYN`, `src/components/ai/models/face_detection_yunet.onnx`, ~230 KB, gitignored like the YOLO weights) — the default. Pose-tolerant: holds a face through head yaw and roll, which a frontal Haar cascade cannot. Requires OpenCV ≥ 4.7 for the 2023mar model; deploy per `setup.sh`.
+  - **Cascade ensemble** — automatic fallback when the ONNX file is missing or OpenCV can't load it. Frontal + profile + *mirrored* profile (`haarcascade_profileface` only fires on faces turned one way), merged with `cv2.dnn.NMSBoxes`. Recovers yaw; roll beyond ~15–20° is still lost, and it produces noticeably more false positives than YuNet. Logs a warning at startup so a silently degraded run is visible.
+  - `face_tracking.detector` in `hardware.yaml` is `auto` | `yunet` (hard-fail if the model is missing) | `cascade`. `_resolve_cascade_path(filename, override)` tries a `hardware.yaml` override, then `cv2.data.haarcascades`, then common apt install paths.
+  - Detection is serialised by `_detect_lock` — YuNet's `setInputSize()` mutates the detector, so concurrent `detect()` calls from executor threads would race.
 - `targeting.py`: `select_target(faces, previous_center)` — the "lock": prefers the detection closest to the previously-tracked face's center (within `lock_max_jump_px`) over always re-picking the largest box, so it doesn't flicker between multiple faces. Falls back to the largest box on first acquisition or after losing the target.
 - `targeting.py`: `compute_new_angles(face_center, current_pan, current_tilt)` — correction is **relative to the servo's current angle**, not absolute-from-center like `object_detection.py`'s `pixel_x_to_servo_angle` (that one assumes the frame was captured facing dead-ahead; here the head is already turned mid-track). Reuses the same `atan2(offset_px, focal_length_px)` pinhole geometry, damped by `pan_gain`/`tilt_gain` and skipped inside `dead_zone_px`, then clamped to `SERVO_CFG`'s servo1/servo2 ranges.
 - `tracker.py`: `run_facial_tracking(controller, camera, websocket)` mirrors `run_autonomous`'s tick-loop shape (deadline pacing, `run_in_executor` for the blocking capture+cascade work, consecutive-error escalation) and sends a `face_state` message per tick. No drive calls — camera-only (`move_camera_to` / `center_camera`).

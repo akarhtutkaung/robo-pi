@@ -9,7 +9,12 @@ import pytest
 
 from src.features.facial_tracking.detector import (
     detect_faces,
+    detector_name,
+    _nms,
     _resolve_cascade_path,
+    _CascadeBackend,
+    _FRONTAL_CASCADE_FILE,
+    _PROFILE_CASCADE_FILE,
 )
 from src.features.facial_tracking.targeting import (
     face_center,
@@ -40,16 +45,63 @@ def test_detect_faces_blank_frame_returns_empty():
     assert detect_faces(blank) == []
 
 
+def test_detect_faces_accepts_back_camera_resolution():
+    # YuNet is stateful about input size — a differently-sized frame must not raise.
+    assert detect_faces(np.zeros((240, 320, 3), dtype=np.uint8)) == []
+
+
+def test_detector_name_is_a_known_backend():
+    assert detector_name() in ("yunet", "cascade")
+
+
 # ---------------------------------------------------------------------------
-# cascade path resolution
+# cascade path resolution + ensemble fallback
 # ---------------------------------------------------------------------------
 
-def test_resolve_cascade_path_finds_a_file():
+def test_resolve_cascade_path_finds_frontal_and_profile():
     # No override configured in this repo's hardware.yaml — must fall through
-    # to cv2.data.haarcascades or a common apt path and find a real file.
+    # to cv2.data.haarcascades or a common apt path and find real files. The
+    # profile cascade is what recovers faces turned left/right.
     import pathlib
-    path = _resolve_cascade_path()
-    assert pathlib.Path(path).is_file()
+    for filename in (_FRONTAL_CASCADE_FILE, _PROFILE_CASCADE_FILE):
+        assert pathlib.Path(_resolve_cascade_path(filename)).is_file()
+
+
+def test_resolve_cascade_path_honours_override():
+    assert _resolve_cascade_path(_FRONTAL_CASCADE_FILE, "/some/explicit/path.xml") == "/some/explicit/path.xml"
+
+
+def test_cascade_backend_runs_all_three_passes():
+    # frontal + profile + mirrored profile — the mirrored pass is what catches
+    # faces turned the direction haarcascade_profileface doesn't fire on.
+    backend = _CascadeBackend()
+    assert backend._profile is not None, "profile cascade missing — yaw coverage lost"
+    assert backend.detect(np.zeros((480, 640, 3), dtype=np.uint8)) == []
+
+
+# ---------------------------------------------------------------------------
+# _nms — merging the cascade ensemble's overlapping passes
+# ---------------------------------------------------------------------------
+
+def test_nms_empty_input():
+    assert _nms([], [], 0.3) == []
+
+
+def test_nms_merges_overlapping_boxes_keeping_higher_score():
+    # Same face found by both the frontal and the profile pass — one box out,
+    # and it should be the frontal (higher score) one.
+    frontal = [100, 100, 100, 100]
+    profile = [105, 103, 100, 100]
+    merged = _nms([profile, frontal], [0.9, 1.0], 0.3)
+    assert len(merged) == 1
+    assert merged[0]["x1"] == 100 and merged[0]["score"] == 1.0
+
+
+def test_nms_keeps_distinct_faces():
+    a = [0, 0, 80, 80]
+    b = [400, 300, 80, 80]
+    merged = _nms([a, b], [1.0, 1.0], 0.3)
+    assert len(merged) == 2
 
 
 # ---------------------------------------------------------------------------

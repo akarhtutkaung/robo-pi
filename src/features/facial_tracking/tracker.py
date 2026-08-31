@@ -38,7 +38,7 @@ from websockets.exceptions import ConnectionClosed
 
 from src.components.camera.camera import capture_bgr
 from src.components.core.config import CAMERA_CFG, FACIAL_TRACKING_CFG
-from src.features.facial_tracking.detector import detect_faces, load_cascade
+from src.features.facial_tracking.detector import detect_faces, detector_name, load_detector
 from src.features.facial_tracking.targeting import (
     bbox_points,
     compute_new_angles,
@@ -132,10 +132,10 @@ async def _send(websocket, tracking: bool, state: _TrackerState, error_x: float,
 
 async def setup(controller):
     controller.center_camera()
-    load_cascade()  # fail fast, before the loop starts, if the cascade can't be found
+    load_detector()  # fail fast, before the loop starts, if no detector can be built
     log.info(
-        "Facial tracking: pan_gain=%.2f tilt_gain=%.2f dead_zone=%dpx lock_max_jump=%dpx",
-        _PAN_GAIN, _TILT_GAIN, _DEAD_ZONE_PX, _LOCK_MAX_JUMP_PX,
+        "Facial tracking: detector=%s pan_gain=%.2f tilt_gain=%.2f dead_zone=%dpx lock_max_jump=%dpx",
+        detector_name(), _PAN_GAIN, _TILT_GAIN, _DEAD_ZONE_PX, _LOCK_MAX_JUMP_PX,
     )
 
 
