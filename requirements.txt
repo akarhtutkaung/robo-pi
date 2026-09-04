@@ -30,6 +30,14 @@ pyyaml
 #
 #   pip install ultralytics onnx
 #   python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt').export(format='onnx', imgsz=320)"
-#   scp yolov8n.onnx pi@<pi-ip>:~/robo-pi/src/ai/models/yolov8n_320.onnx
+#   scp yolov8n.onnx pi@<pi-ip>:~/robo-pi/src/components/ai/models/yolov8n_320.onnx
 #
-# The model file is gitignored (src/ai/models/*). setup.sh creates the directory.
+# Facial tracking uses YuNet (cv2.FaceDetectorYN), a prebuilt ~230 KB ONNX — no
+# export step, just download and copy. Needs OpenCV >= 4.7 for the 2023mar model:
+#
+#   curl -L -o face_detection_yunet.onnx \
+#     https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx
+#   scp face_detection_yunet.onnx pi@<pi-ip>:~/robo-pi/src/components/ai/models/face_detection_yunet.onnx
+#
+# Both model files are gitignored (src/components/ai/models/*). setup.sh creates
+# the directory. Facial tracking falls back to Haar cascades if YuNet is absent.

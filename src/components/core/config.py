@@ -25,5 +25,7 @@ ULTRASONIC_REAR_CFG   = _hw.get("ultrasonic_rear", {})  # rear sensor — empty 
 CAMERA_CFG            = _hw["cameras"]            # front/back index and resolution
 DEBUG_STREAM_CFG      = _hw["debug_stream"]       # enabled, port, fps
 OBSTACLE_AVOIDANCE_CFG = _hw["obstacle_avoidance"] # robot_width_cm, clearance_buffer_cm, focal_length_px, camera_hfov_deg
+FACE_TRACKING_CFG      = _hw["face_tracking"]      # cascade_path, min_face_size_px
 
-AUTONOMOUS_CFG = _modes["autonomous"]  # speed constants for autonomous mode
+AUTONOMOUS_CFG      = _modes["autonomous"]        # speed constants for autonomous mode
+FACIAL_TRACKING_CFG = _modes["facial_tracking"]   # pan/tilt gain, dead zone, lock, timing for facial tracking

@@ -21,3 +21,37 @@ autonomous:
   sweep_angle_deg: 20  # degrees either side of centre for background sweep
   warn_cm: 60          # slow to approach_speed if YOLO+ultrasonic confirm obstacle within this range
   yolo_block_ratio: 0.25  # min bounding-box width fraction to trigger YOLO-only avoidance for low obstacles
+
+facial_tracking:
+  loop_period_s: 0.1        # target seconds per tracking tick (same cadence as autonomous mode)
+  pan_gain: 0.6             # 0-1 damping applied to the pan (servo1) correction per tick
+  tilt_gain: 0.35           # 0-1 damping applied to the tilt (servo2) correction per tick — tuned lower
+                             # than pan_gain because the tilt servo's physical response to a commanded
+                             # degree differs from pan's (mechanical load asymmetry, e.g. fighting gravity
+                             # moving up vs down); re-tune by feel on the Pi if it rings or feels sluggish
+  dead_zone_px: 20          # skip correction once the face center is within this many px of frame center
+  max_step_deg: 15           # max degrees the pan/tilt correction may move in a single tick (rate limit) —
+                             # without this, a large offset snaps the servo instantly (gain * atan(offset)
+                             # can be 15-30deg in one 100ms tick) instead of gliding; lower = smoother/slower
+                             # to catch up, higher = snappier but more prone to overshoot/jiggering
+  min_step_deg: 3           # skip commanding the servo for a correction smaller than this (hysteresis) —
+                             # without it, every tick writes to hardware even for a fraction of a degree;
+                             # cheap hobby servos visibly buzz/jiggle chasing tiny, constantly-refreshed
+                             # setpoints instead of holding still, especially right at the dead_zone_px edge.
+                             # Must exceed pan_gain * atan(dead_zone_px / focal_length_px) in degrees (the
+                             # smallest correction possible the instant a face crosses outside the dead
+                             # zone — ~2.65deg at these defaults) or it has no effect at all; re-check this
+                             # if you retune dead_zone_px, pan_gain/tilt_gain, or focal_length_px.
+  smoothing_alpha: 0.5      # EMA weight (0-1) on each new detected face center before it drives the
+                             # servo correction — lower = smoother/slower, higher = more responsive/noisier.
+                             # The detected box is noticeably less stable while a face is actively moving
+                             # or turning (motion blur, box shifting as yaw changes) than while static —
+                             # unfiltered, that shows up as a rapid stutter while chasing even though a
+                             # still face converges and holds cleanly. 0.5 is deliberately lighter than an
+                             # earlier 0.4 attempt that read as sluggish — that was compounded by
+                             # max_step_deg being too low (3) at the time, since fixed independently.
+  lock_max_jump_px: 200     # max center-to-center jump to keep tracking the same face across ticks
+  lost_face_recenter_after_s: 2.0  # recenter head + drop locked target after this long with no detection
+  recenter_step_deg: 15      # max degrees per tick while gliding back to center after the face is lost —
+                             # keeps the head easing back to center rather than snapping there in one write.
+  invert_tilt: false        # flip if tilt moves the wrong way on first test — verify empirically on the Pi
