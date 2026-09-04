@@ -25,7 +25,12 @@ autonomous:
 facial_tracking:
   loop_period_s: 0.1        # target seconds per tracking tick (same cadence as autonomous mode)
   pan_gain: 0.6             # 0-1 damping applied to the pan (servo1) correction per tick
-  tilt_gain: 0.6            # 0-1 damping applied to the tilt (servo2) correction per tick
+  tilt_gain: 0.35           # 0-1 damping applied to the tilt (servo2) correction per tick — lower than
+                             # pan_gain: tilt overshoots/rings past center at 0.6 even though the control
+                             # loop math is identical to pan, so the servo's physical response to a
+                             # commanded degree must differ from pan's (mechanical load asymmetry, e.g.
+                             # fighting gravity moving up vs down) — re-tune by feel on the Pi if it still
+                             # rings or now feels sluggish
   dead_zone_px: 20          # skip correction once the face center is within this many px of frame center
   max_step_deg: 8           # max degrees the pan/tilt correction may move in a single tick (rate limit) —
                              # without this, a large offset snaps the servo instantly (gain * atan(offset)
