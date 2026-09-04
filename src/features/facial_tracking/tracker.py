@@ -67,9 +67,8 @@ _LOST_RECENTER_S = FACIAL_TRACKING_CFG["lost_face_recenter_after_s"]
 # than gliding. Gates the write only; compute_new_angles' own state (below)
 # still reflects the actual last-commanded angle either way.
 _MIN_STEP_DEG    = FACIAL_TRACKING_CFG["min_step_deg"]
-# Per-tick glide rate while recentering after the face is lost — slower than
-# _MAX_STEP_DEG's tracking glide, since there's no face to chase and an
-# instant snap back to center reads as jarring rather than smooth.
+# Per-tick glide rate while recentering after the face is lost — keeps the
+# head easing back to center smoothly rather than jumping there in one write.
 _RECENTER_STEP_DEG = FACIAL_TRACKING_CFG["recenter_step_deg"]
 
 _MAX_CONSECUTIVE_ERRORS = 5
@@ -92,8 +91,15 @@ class _TrackerState:
 
 
 def _capture_and_detect(camera) -> list[dict]:
-    """Blocking work for one tick — always run via run_in_executor."""
-    frame = capture_bgr(camera)
+    """Blocking work for one tick — always run via run_in_executor.
+
+    Reads the main stream (1920x1080) and resizes down to (_FRAME_W, _FRAME_H) —
+    face_tracking.frame_width/height in hardware.yaml — rather than the shared
+    lores stream. Detection runs at whatever resolution facial tracking is
+    configured to, independent of the lores resolution autonomous/free_space
+    are calibrated against.
+    """
+    frame = capture_bgr(camera, stream="main", size=(_FRAME_W, _FRAME_H))
     return detect_faces(frame)
 
 
@@ -110,10 +116,9 @@ async def track_step(controller, camera, state: _TrackerState) -> bool:
             state.target_center = None
             state.smoothed_center = None
             state.target_box = None
-        # Glide back to center at _RECENTER_STEP_DEG/tick, same rate-limited-step
-        # mechanism as tracking (_clamp_step), instead of snapping in one write —
-        # runs every tick once lost long enough, until pan/tilt reach center, not
-        # just once at the moment the target is dropped.
+        # Glides pan/tilt back to center at _RECENTER_STEP_DEG/tick using the same
+        # rate-limited-step mechanism as tracking (_clamp_step). Runs every tick
+        # while lost, until pan/tilt reach center.
         if lost_for > _LOST_RECENTER_S:
             new_pan = _clamp_step(state.pan, _SERVO1_CENTER, _RECENTER_STEP_DEG)
             new_tilt = _clamp_step(state.tilt, _SERVO2_CENTER, _RECENTER_STEP_DEG)
