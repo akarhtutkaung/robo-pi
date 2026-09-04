@@ -54,7 +54,7 @@ facial_tracking:
                              # max_step_deg being too low (3) at the time, since fixed independently.
   lock_max_jump_px: 200     # max center-to-center jump to keep tracking the same face across ticks
   lost_face_recenter_after_s: 2.0  # recenter head + drop locked target after this long with no detection
-  recenter_step_deg: 2      # max degrees per tick while gliding back to center after the face is lost —
+  recenter_step_deg: 5      # max degrees per tick while gliding back to center after the face is lost —
                              # deliberately slower than max_step_deg's tracking glide (8): recentering has
                              # no face to chase, so there's no reason to snap, and a fast unprompted head
                              # snap while nothing is being tracked reads as jarring rather than smooth.
