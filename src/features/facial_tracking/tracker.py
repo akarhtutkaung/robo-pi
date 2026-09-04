@@ -45,6 +45,7 @@ from src.features.facial_tracking.targeting import (
     face_center,
     select_target,
     smooth_center,
+    _clamp_step,
     _DEAD_ZONE_PX,
     _FRAME_H,
     _FRAME_W,
@@ -66,6 +67,10 @@ _LOST_RECENTER_S = FACIAL_TRACKING_CFG["lost_face_recenter_after_s"]
 # than gliding. Gates the write only; compute_new_angles' own state (below)
 # still reflects the actual last-commanded angle either way.
 _MIN_STEP_DEG    = FACIAL_TRACKING_CFG["min_step_deg"]
+# Per-tick glide rate while recentering after the face is lost — slower than
+# _MAX_STEP_DEG's tracking glide, since there's no face to chase and an
+# instant snap back to center reads as jarring rather than smooth.
+_RECENTER_STEP_DEG = FACIAL_TRACKING_CFG["recenter_step_deg"]
 
 _MAX_CONSECUTIVE_ERRORS = 5
 
@@ -100,12 +105,24 @@ async def track_step(controller, camera, state: _TrackerState) -> bool:
     target = select_target(faces, state.target_center)
 
     if target is None:
-        if state.target_center is not None and time.monotonic() - state.last_seen > _LOST_RECENTER_S:
+        lost_for = time.monotonic() - state.last_seen
+        if state.target_center is not None and lost_for > _LOST_RECENTER_S:
             state.target_center = None
             state.smoothed_center = None
             state.target_box = None
-            state.pan, state.tilt = _SERVO1_CENTER, _SERVO2_CENTER
-            controller.center_camera()
+        # Glide back to center at _RECENTER_STEP_DEG/tick, same rate-limited-step
+        # mechanism as tracking (_clamp_step), instead of snapping in one write —
+        # runs every tick once lost long enough, until pan/tilt reach center, not
+        # just once at the moment the target is dropped.
+        if lost_for > _LOST_RECENTER_S:
+            new_pan = _clamp_step(state.pan, _SERVO1_CENTER, _RECENTER_STEP_DEG)
+            new_tilt = _clamp_step(state.tilt, _SERVO2_CENTER, _RECENTER_STEP_DEG)
+            if new_pan != state.pan:
+                controller.move_camera_to("x", int(round(new_pan)))
+                state.pan = new_pan
+            if new_tilt != state.tilt:
+                controller.move_camera_to("y", int(round(new_tilt)))
+                state.tilt = new_tilt
         return False
 
     state.last_seen = time.monotonic()
