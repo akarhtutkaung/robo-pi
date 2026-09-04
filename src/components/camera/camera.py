@@ -14,6 +14,7 @@ devices are acquired once and shared across WebRTC streaming and autonomous visi
 Dependencies: aiortc, av, picamera2, opencv-python
 """
 
+import asyncio
 import contextlib
 import cv2
 import numpy as np
@@ -107,7 +108,8 @@ class CameraVideoTrack(VideoStreamTrack):
 
     async def recv(self):
         pts, time_base = await self.next_timestamp()
-        arr = self._camera.capture_array()
+        loop = asyncio.get_running_loop()
+        arr = await loop.run_in_executor(None, self._camera.capture_array)
         frame = VideoFrame.from_ndarray(arr, format="yuv420p")
         if frame.width != self._stream_w or frame.height != self._stream_h:
             frame = frame.reformat(width=self._stream_w, height=self._stream_h)
