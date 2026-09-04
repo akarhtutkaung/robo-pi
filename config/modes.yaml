@@ -32,7 +32,7 @@ facial_tracking:
                              # fighting gravity moving up vs down) — re-tune by feel on the Pi if it still
                              # rings or now feels sluggish
   dead_zone_px: 20          # skip correction once the face center is within this many px of frame center
-  max_step_deg: 8           # max degrees the pan/tilt correction may move in a single tick (rate limit) —
+  max_step_deg: 15           # max degrees the pan/tilt correction may move in a single tick (rate limit) —
                              # without this, a large offset snaps the servo instantly (gain * atan(offset)
                              # can be 15-30deg in one 100ms tick) instead of gliding; lower = smoother/slower
                              # to catch up, higher = snappier but more prone to overshoot/jiggering
