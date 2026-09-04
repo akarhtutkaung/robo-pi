@@ -118,9 +118,6 @@ face_tracking:
                          # "yunet" forces YuNet (startup error if missing); "cascade" forces Haar.
   min_face_size_px: 60   # ignore detections smaller than this (reduces false positives)
 
-  frame_width: 640     # width of the camera frame to feed into the face detector
-  frame_height: 480     # height of the camera frame to feed into the face detector 
-
   # YuNet — the pose-tolerant detector. Holds a face through head turn (yaw) and
   # tilt (roll), which the frontal Haar cascade cannot. ~340 KB; deploy with setup.sh's
   # curl + scp step. Gitignored like the YOLO weights.

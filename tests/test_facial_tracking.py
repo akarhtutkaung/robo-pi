@@ -210,9 +210,9 @@ def test_compute_new_angles_limits_large_correction_to_max_step_per_tick():
     # one tick (gain * atan(offset/focal) can be 15-30deg) — the rate limit is
     # what caps it to exactly max_step_deg. The offset is many frame-widths out
     # so the raw atan2-based correction comfortably exceeds max_step_deg across
-    # any frame size / focal length / gain / max_step_deg combination. Starting
-    # well away from the servo's own range limit isolates the step clamp from
-    # the separate range clamp covered above.
+    # any focal length / gain / max_step_deg combination. Starting well away
+    # from the servo's own range limit isolates the step clamp from the
+    # separate range clamp covered above.
     extreme_offset = 50 * _FRAME_W
     face_far_right = (_FRAME_W / 2.0 + extreme_offset, _FRAME_H / 2.0)
     new_pan, _ = compute_new_angles(face_far_right, _SERVO1_CENTER, _SERVO2_CENTER)
@@ -255,10 +255,8 @@ def test_track_step_skips_write_for_sub_min_step_correction(monkeypatch):
 
 
 def test_track_step_writes_for_correction_past_min_step(monkeypatch):
-    # A quarter-frame offset scales with whatever resolution facial tracking is
-    # configured to, and is comfortably past min_step_deg across any frame size /
-    # focal length / gain combination.
-    face = _face_box(_FRAME_W / 2.0 + _FRAME_W / 4.0, _FRAME_H / 2.0)
+    # A clearly larger offset (30px) produces ~3.96deg — past min_step_deg.
+    face = _face_box(_FRAME_W / 2.0 + 30, _FRAME_H / 2.0)
     controller, state = _run_track_step(monkeypatch, [face])
     controller.move_camera_to.assert_called_once()
     axis, angle = controller.move_camera_to.call_args[0]

@@ -26,7 +26,7 @@ obstacle sweep, which starts centered).
 import math
 
 from src.components.core.config import (
-    CAMERA_CFG, FACE_TRACKING_CFG, FACIAL_TRACKING_CFG, OBSTACLE_AVOIDANCE_CFG, SERVO_CFG,
+    CAMERA_CFG, FACIAL_TRACKING_CFG, OBSTACLE_AVOIDANCE_CFG, SERVO_CFG,
 )
 
 _PAN_GAIN         = FACIAL_TRACKING_CFG["pan_gain"]
@@ -37,23 +37,15 @@ _SMOOTHING_ALPHA  = FACIAL_TRACKING_CFG["smoothing_alpha"]
 _LOCK_MAX_JUMP_PX = FACIAL_TRACKING_CFG["lock_max_jump_px"]
 _INVERT_TILT      = FACIAL_TRACKING_CFG["invert_tilt"]
 
+_FOCAL_LENGTH_PX = OBSTACLE_AVOIDANCE_CFG["focal_length_px"]
+
 _SERVO1_CFG = SERVO_CFG["servo1"]  # head left/right (pan)
 _SERVO2_CFG = SERVO_CFG["servo2"]  # head up/down (tilt)
 _SERVO1_CENTER = _SERVO1_CFG["center_angle"]
 _SERVO2_CENTER = _SERVO2_CFG["center_angle"]
 
-# obstacle_avoidance.focal_length_px is calibrated for the 640x480 lores frame.
-# Detection here runs at frame_width x frame_height instead (tracker.py's
-# _capture_and_detect), so each axis's focal length is scaled by that axis's own
-# ratio to 640/480 — separately, because frame_width/frame_height can be a
-# different aspect ratio than 640x480, and each axis's pixel-per-degree density
-# only tracks that axis's own scale factor. atan2(offset_px, focal) then measures
-# the same real-world angle per pixel at whatever resolution facial tracking is
-# configured to.
-_FRAME_W = FACE_TRACKING_CFG["frame_width"]
-_FRAME_H = FACE_TRACKING_CFG["frame_height"]
-_FOCAL_X_PX = OBSTACLE_AVOIDANCE_CFG["focal_length_px"] * (_FRAME_W / CAMERA_CFG["front"]["lores_width"])
-_FOCAL_Y_PX = OBSTACLE_AVOIDANCE_CFG["focal_length_px"] * (_FRAME_H / CAMERA_CFG["front"]["lores_height"])
+_FRAME_W = CAMERA_CFG["front"]["lores_width"]
+_FRAME_H = CAMERA_CFG["front"]["lores_height"]
 
 
 def face_center(box: dict) -> tuple[float, float]:
@@ -164,13 +156,13 @@ def compute_new_angles(
     new_pan, new_tilt = current_pan, current_tilt
 
     if abs(offset_x) > _DEAD_ZONE_PX:
-        pan_delta_deg = math.degrees(math.atan2(offset_x, _FOCAL_X_PX))
+        pan_delta_deg = math.degrees(math.atan2(offset_x, _FOCAL_LENGTH_PX))
         # servo1: decreasing angle = right (matches pixel_x_to_servo_angle's sign convention)
         target_pan = current_pan - _PAN_GAIN * pan_delta_deg
         new_pan = _clamp_step(current_pan, target_pan, _MAX_STEP_DEG)
 
     if abs(offset_y) > _DEAD_ZONE_PX:
-        tilt_delta_deg = math.degrees(math.atan2(offset_y, _FOCAL_Y_PX))
+        tilt_delta_deg = math.degrees(math.atan2(offset_y, _FOCAL_LENGTH_PX))
         sign = 1.0 if _INVERT_TILT else -1.0
         target_tilt = current_tilt + sign * _TILT_GAIN * tilt_delta_deg
         new_tilt = _clamp_step(current_tilt, target_tilt, _MAX_STEP_DEG)

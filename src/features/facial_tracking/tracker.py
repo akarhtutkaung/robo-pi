@@ -91,15 +91,8 @@ class _TrackerState:
 
 
 def _capture_and_detect(camera) -> list[dict]:
-    """Blocking work for one tick — always run via run_in_executor.
-
-    Reads the main stream (1920x1080) and resizes down to (_FRAME_W, _FRAME_H) —
-    face_tracking.frame_width/height in hardware.yaml — rather than the shared
-    lores stream. Detection runs at whatever resolution facial tracking is
-    configured to, independent of the lores resolution autonomous/free_space
-    are calibrated against.
-    """
-    frame = capture_bgr(camera, stream="main", size=(_FRAME_W, _FRAME_H))
+    """Blocking work for one tick — always run via run_in_executor."""
+    frame = capture_bgr(camera)
     return detect_faces(frame)
 
 

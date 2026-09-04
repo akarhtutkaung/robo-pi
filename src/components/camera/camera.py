@@ -81,22 +81,13 @@ class CameraSwitch:
         self._back.stop()
 
 
-def capture_bgr(camera, stream: str = "lores", size: tuple[int, int] | None = None) -> np.ndarray:
-    """Return a BGR frame from the named stream for OpenCV processing.
+def capture_bgr(camera) -> np.ndarray:
+    """Return a BGR frame from the lores stream for OpenCV processing.
 
-    Accepts either a Picamera2 instance or a CameraSwitch. Defaults to the lores
-    stream, at whatever resolution hardware.yaml's cameras.<front|back>.lores_*
-    configures. Pass stream="main" + size=(w, h) to read the main stream instead
-    and resize the result to size in software — lets a caller run at a resolution
-    of its own choosing, decoupled from lores' resolution and whatever else is
-    calibrated against it. size is always a downscale from main's native
-    resolution (1920x1080 front).
+    Accepts either a Picamera2 instance or a CameraSwitch.
     """
-    yuv = camera.capture_array(stream)
-    bgr = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_I420)
-    if size is not None and (bgr.shape[1], bgr.shape[0]) != size:
-        bgr = cv2.resize(bgr, size, interpolation=cv2.INTER_AREA)
-    return bgr
+    yuv = camera.capture_array("lores")
+    return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_I420)
 
 
 class CameraVideoTrack(VideoStreamTrack):
